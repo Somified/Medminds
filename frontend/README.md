@@ -40,3 +40,29 @@ Then open the local Vite URL shown in the terminal.
 ```bash
 npm run build
 ```
+
+## Current Work Status
+
+## ✅ Completed
+New / existing patient portal flow
+Patient registration & login frontend
+Aadhaar / ABHA / phone verification frontend (demo)
+Password & mock OTP login
+Patient identification & consent
+Clinical history intake and adaptive HPI
+AYUSH history
+Red-flag interface
+Structured case summary & submission
+Medical document/photo upload UI
+
+## 🔄 Pending Integration
+Real Aadhaar / ABHA / OTP verification
+Secure authentication & backend patient accounts
+OCR & medical document extraction
+AI / voice / summarization
+ABDM / FHIR / HIS integration
+Biometric / thumb authentication
+
+### 🔮 Future
+- Touch/sensory interaction
+- Audio-guided interaction

@@ -3,6 +3,14 @@ import React, { useEffect, useMemo, useState } from "react";
 const EMPTY_CASE = {
   patient: {
     type: "new",
+    verificationMethod: "ABHA ID",
+    verificationValue: "",
+    verified: false,
+    phone: "",
+    password: "",
+    authMethod: "password",
+    otp: "",
+
     abhaId: "",
     name: "",
     age: "",
@@ -10,6 +18,7 @@ const EMPTY_CASE = {
     language: "English"
   },
   consent: false,
+  documents: [],
   mode: "Allopathic",
   chiefComplaint: [],
   otherComplaint: "",
@@ -38,6 +47,8 @@ const EMPTY_CASE = {
   status: "draft"
 };
 
+const API_BASE = "http://localhost:4000";
+
 const sections = [
   ["complaint", "Chief Complaint"],
   ["hpi", "History of Present Illness"],
@@ -65,12 +76,135 @@ function cloneEmptyCase() {
   return JSON.parse(JSON.stringify(EMPTY_CASE));
 }
 
+const UI_TEXT = {
+  English: {
+    portalBadge: "PATIENT PORTAL",
+    welcome: "Welcome to MediKiosk",
+    subtitle: "Secure patient registration, medical record upload and guided clinical history collection.",
+    newPatient: "New Patient",
+    newPatientDesc: "Register for the first time using identity verification and create your login.",
+    existingPatient: "Existing Patient",
+    existingPatientDesc: "Already registered? Log in using your password or a one-time OTP.",
+    register: "Register →",
+    login: "Login →",
+    prototype: "Prototype mode",
+    prototypeDesc: "Identity verification, OTP delivery, biometric authentication and secure backend storage are simulated for this MVP.",
+    language: "Preferred language",
+    continue: "Continue →",
+    back: "← Back",
+    newBadge: "NEW PATIENT",
+    existingBadge: "EXISTING PATIENT",
+    createAccount: "Create Patient Account",
+    loginTitle: "Patient Login",
+    fullName: "Full name",
+    phone: "Phone number",
+    age: "Age",
+    gender: "Gender",
+    select: "Select",
+    aadhaar: "Aadhaar number",
+    password: "Password",
+    createPassword: "Create password",
+    passwordHint: "Minimum 6 characters",
+    biometric: "👆 Thumb / Biometric — Coming soon",
+    verifyCreate: "Verify & Create Account →",
+    patientId: "Phone number / Patient ID",
+    chooseLogin: "Choose login method",
+    demoOtp: "Demo OTP",
+    otpHint: "For this prototype, use 123456.",
+    enterOtp: "Enter OTP",
+    loginContinue: "Login & Continue →",
+    identify: "Patient Identification",
+    identificationDesc: "Confirm the patient's basic information before starting the clinical history.",
+    consultationMode: "Consultation mode",
+    consent: "Consent",
+    consentText: "I consent to the collection and processing of my clinical history for this consultation.",
+    startHistory: "Start Clinical History →",
+    documents: "Upload Medical Documents",
+    documentsDesc: "Add previous prescriptions, lab reports, discharge summaries, medical records or photos.",
+    chooseFiles: "+ Choose Files",
+    continueCase: "Continue to Case Taking →",
+    caseProgress: "Case Progress",
+    chiefComplaint: "Chief Complaint",
+    hpi: "History of Present Illness",
+    reviewSubmit: "Review & Submit",
+    uploadDocuments: "Upload Documents",
+    saveContinue: "Save & Continue →",
+    previous: "← Previous",
+    patientDescription: "Describe what has been happening in your own words...",
+    noDocs: "No documents uploaded yet.",
+    languageChanged: "Language updated.",
+    languageHelp: "You can change this later from the patient bar."
+  },
+  Hindi: {
+    portalBadge: "रोगी पोर्टल",
+    welcome: "MediKiosk में आपका स्वागत है",
+    subtitle: "सुरक्षित पंजीकरण, मेडिकल रिकॉर्ड अपलोड और निर्देशित क्लिनिकल हिस्ट्री।",
+    newPatient: "नया रोगी",
+    newPatientDesc: "पहली बार पंजीकरण करें, पहचान सत्यापित करें और अपना लॉगिन बनाएं।",
+    existingPatient: "पहले से पंजीकृत रोगी",
+    existingPatientDesc: "पहले से पंजीकृत हैं? पासवर्ड या OTP से लॉगिन करें।",
+    register: "पंजीकरण करें →",
+    login: "लॉगिन करें →",
+    prototype: "प्रोटोटाइप मोड",
+    prototypeDesc: "पहचान सत्यापन, OTP, बायोमेट्रिक और सुरक्षित बैकएंड इस MVP में सिमुलेटेड हैं।",
+    language: "पसंदीदा भाषा",
+    continue: "आगे बढ़ें →",
+    back: "← वापस",
+    newBadge: "नया रोगी",
+    existingBadge: "पहले से पंजीकृत रोगी",
+    createAccount: "रोगी खाता बनाएं",
+    loginTitle: "रोगी लॉगिन",
+    fullName: "पूरा नाम",
+    phone: "फोन नंबर",
+    age: "उम्र",
+    gender: "लिंग",
+    select: "चुनें",
+    aadhaar: "आधार नंबर",
+    password: "पासवर्ड",
+    createPassword: "पासवर्ड बनाएं",
+    passwordHint: "कम से कम 6 अक्षर",
+    biometric: "👆 अंगूठा / बायोमेट्रिक — जल्द उपलब्ध",
+    verifyCreate: "सत्यापित करें और खाता बनाएं →",
+    patientId: "फोन नंबर / रोगी ID",
+    chooseLogin: "लॉगिन का तरीका चुनें",
+    demoOtp: "डेमो OTP",
+    otpHint: "इस प्रोटोटाइप के लिए 123456 इस्तेमाल करें।",
+    enterOtp: "OTP दर्ज करें",
+    loginContinue: "लॉगिन करके आगे बढ़ें →",
+    identify: "रोगी की जानकारी",
+    identificationDesc: "क्लिनिकल हिस्ट्री शुरू करने से पहले जानकारी की पुष्टि करें।",
+    consultationMode: "परामर्श का प्रकार",
+    consent: "सहमति",
+    consentText: "मैं इस परामर्श के लिए अपनी क्लिनिकल हिस्ट्री के संग्रह और उपयोग की सहमति देता/देती हूँ।",
+    startHistory: "क्लिनिकल हिस्ट्री शुरू करें →",
+    documents: "मेडिकल दस्तावेज़ अपलोड करें",
+    documentsDesc: "पुराने प्रिस्क्रिप्शन, लैब रिपोर्ट, डिस्चार्ज समरी, मेडिकल रिकॉर्ड या फोटो जोड़ें।",
+    chooseFiles: "+ फाइल चुनें",
+    continueCase: "केस हिस्ट्री पर जाएं →",
+    caseProgress: "केस प्रगति",
+    chiefComplaint: "मुख्य शिकायत",
+    hpi: "वर्तमान बीमारी का इतिहास",
+    reviewSubmit: "समीक्षा और सबमिट",
+    uploadDocuments: "दस्तावेज़ अपलोड करें",
+    saveContinue: "सेव करें और आगे बढ़ें →",
+    previous: "← पिछला",
+    patientDescription: "अपनी समस्या अपने शब्दों में बताएं...",
+    noDocs: "अभी कोई दस्तावेज़ अपलोड नहीं है।",
+    languageChanged: "भाषा बदल दी गई है।",
+    languageHelp: "आप इसे बाद में पेशेंट बार से बदल सकते हैं।"
+  }
+};
+
+function t(language, key) {
+  return (UI_TEXT[language] || UI_TEXT.English)[key] || UI_TEXT.English[key] || key;
+}
+
 function App() {
   const [caseData, setCaseData] = useState(() => {
     const saved = localStorage.getItem("medikiosk-case");
     return saved ? JSON.parse(saved) : cloneEmptyCase();
   });
-  const [screen, setScreen] = useState("identify");
+  const [screen, setScreen] = useState("portal");
   const [section, setSection] = useState("complaint");
   const [alert, setAlert] = useState(null);
   const [saved, setSaved] = useState(false);
@@ -114,6 +248,224 @@ function App() {
     setSaved(false);
   };
 
+  const choosePatientType = (type) => {
+    setAlert(null);
+    if (type === "new") {
+      setCaseData(prev => ({
+        ...prev,
+        patient: {
+          ...prev.patient,
+          type: "new",
+          verified: false,
+          verificationMethod: "Aadhaar",
+          verificationValue: "",
+          password: "",
+          authMethod: "password"
+        }
+      }));
+      setScreen("newRegister");
+    } else {
+      setCaseData(prev => ({
+        ...prev,
+        patient: {
+          ...prev.patient,
+          type: "existing",
+          verified: false,
+          authMethod: "password"
+        }
+      }));
+      setScreen("existingLogin");
+    }
+  };
+
+  const registerNewPatient = async () => {
+    const p = caseData.patient;
+    const aadhaar = p.verificationValue.replace(/\s/g, "");
+
+    if (!p.name.trim()) {
+      setAlert("Enter the patient's full name.");
+      return;
+    }
+    if (!/^\d{10}$/.test(p.phone)) {
+      setAlert("Enter a valid 10-digit phone number.");
+      return;
+    }
+    if (!/^\d{12}$/.test(aadhaar)) {
+      setAlert("Enter a valid 12-digit Aadhaar number.");
+      return;
+    }
+    if ((p.password || "").length < 6) {
+      setAlert("Password must be at least 6 characters.");
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: p.name,
+          phone: p.phone,
+          password: p.password,
+          aadhaar,
+          age: p.age,
+          gender: p.gender,
+          language: p.language
+        })
+      });
+
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Registration failed.");
+
+      localStorage.setItem("medikiosk-token", result.token);
+
+      setCaseData(prev => ({
+        ...prev,
+        patient: {
+          ...prev.patient,
+          verified: true,
+          abhaId: result.patient.abhaId || ""
+        }
+      }));
+      setAlert(null);
+      setScreen("identify");
+    } catch (error) {
+      setAlert(error.message);
+    }
+  };
+
+  const loginExistingPatient = async () => {
+    const p = caseData.patient;
+    const credential = p.verificationValue.trim();
+
+    if (!credential) {
+      setAlert("Enter your phone number or Patient ID.");
+      return;
+    }
+
+    try {
+      let result;
+
+      if (p.authMethod === "password") {
+        if ((p.password || "").length < 6) {
+          setAlert("Enter a password of at least 6 characters.");
+          return;
+        }
+
+        const response = await fetch(`${API_BASE}/api/auth/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            phone: credential,
+            password: p.password
+          })
+        });
+
+        result = await response.json();
+        if (!response.ok) throw new Error(result.error || "Login failed.");
+      } else {
+        if (!/^\d{10}$/.test(credential)) {
+          setAlert("For OTP login, enter the registered 10-digit phone number.");
+          return;
+        }
+
+        if (!(p.otp || "").trim()) {
+          const response = await fetch(`${API_BASE}/api/auth/otp/request`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ phone: credential })
+          });
+          const requested = await response.json();
+          if (!response.ok) throw new Error(requested.error || "Could not request OTP.");
+
+          setAlert("Demo OTP generated: 123456. Enter it and press Login again.");
+          return;
+        }
+
+        const response = await fetch(`${API_BASE}/api/auth/otp/verify`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            phone: credential,
+            otp: p.otp
+          })
+        });
+
+        result = await response.json();
+        if (!response.ok) throw new Error(result.error || "OTP verification failed.");
+      }
+
+      localStorage.setItem("medikiosk-token", result.token);
+
+      setCaseData(prev => ({
+        ...prev,
+        patient: {
+          ...prev.patient,
+          verified: true,
+          phone: result.patient.phone,
+          name: result.patient.name || "",
+          age: result.patient.age || "",
+          gender: result.patient.gender || "",
+          language: result.patient.language || "English",
+          abhaId: result.patient.abhaId || ""
+        }
+      }));
+      setAlert(null);
+      setScreen("identify");
+    } catch (error) {
+      setAlert(error.message);
+    }
+  };
+
+  const logoutToPortal = () => {
+    setAlert(null);
+    setScreen("portal");
+  };
+
+  const addDocuments = (fileList) => {
+    const incoming = Array.from(fileList || []);
+    const maxSize = 10 * 1024 * 1024;
+
+    const accepted = incoming
+      .filter(file => file.size <= maxSize)
+      .map(file => ({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        name: file.name,
+        type: file.type || "application/octet-stream",
+        size: file.size,
+        category: "Other",
+        preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : null
+      }));
+
+    if (incoming.some(file => file.size > maxSize)) {
+      setAlert("Some files were skipped because they are larger than 10 MB.");
+    }
+
+    setCaseData(prev => ({
+      ...prev,
+      documents: [...prev.documents, ...accepted]
+    }));
+    setSaved(false);
+  };
+
+  const removeDocument = (id) => {
+    setCaseData(prev => ({
+      ...prev,
+      documents: prev.documents.filter(doc => doc.id !== id)
+    }));
+    setSaved(false);
+  };
+
+  const setDocumentCategory = (id, category) => {
+    setCaseData(prev => ({
+      ...prev,
+      documents: prev.documents.map(doc =>
+        doc.id === id ? { ...doc, category } : doc
+      )
+    }));
+    setSaved(false);
+  };
+
   const startCase = () => {
     if (!caseData.patient.name && !caseData.patient.abhaId) {
       setAlert("Enter at least the patient's name or ABHA ID.");
@@ -124,7 +476,7 @@ function App() {
       return;
     }
     setScreen("case");
-    setSection("complaint");
+    setSection("documents");
   };
 
   const next = () => {
@@ -137,18 +489,41 @@ function App() {
     if (current > 0) setSection(sections[current - 1][0]);
   };
 
-  const submitCase = () => {
+  const submitCase = async () => {
     const finalized = { ...caseData, status: "submitted", submittedAt: new Date().toISOString() };
     setCaseData(finalized);
     setSaved(true);
-    setScreen("submitted");
     localStorage.setItem("medikiosk-case", JSON.stringify(finalized));
+
+    const token = localStorage.getItem("medikiosk-token");
+
+    if (token) {
+      try {
+        const response = await fetch(`${API_BASE}/api/cases`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify(finalized)
+        });
+
+        if (!response.ok) {
+          const result = await response.json().catch(() => ({}));
+          throw new Error(result.error || "Backend case save failed.");
+        }
+      } catch (error) {
+        setAlert(`Saved locally, but backend save failed: ${error.message}`);
+      }
+    }
+
+    setScreen("submitted");
   };
 
   const newCase = () => {
     localStorage.removeItem("medikiosk-case");
     setCaseData(cloneEmptyCase());
-    setScreen("identify");
+    setScreen("portal");
     setSection("complaint");
     setSaved(false);
     setAlert(null);
@@ -160,6 +535,9 @@ function App() {
         <strong>MediKiosk</strong>
         <span>Clinical History Intake MVP</span>
         {caseData.status === "submitted" && <button onClick={newCase}>New Case</button>}
+        {screen !== "portal" && screen !== "submitted" && (
+          <button onClick={logoutToPortal}>Patient Portal</button>
+        )}
       </header>
 
       {alert && (
@@ -168,6 +546,32 @@ function App() {
           <span>{alert}</span>
           <button onClick={() => setAlert(null)}>Dismiss</button>
         </div>
+      )}
+
+      {screen === "portal" && (
+        <PatientPortal
+          data={caseData}
+          update={update}
+          onChoose={choosePatientType}
+        />
+      )}
+
+      {screen === "newRegister" && (
+        <NewPatientRegistration
+          data={caseData}
+          update={update}
+          onRegister={registerNewPatient}
+          onBack={logoutToPortal}
+        />
+      )}
+
+      {screen === "existingLogin" && (
+        <ExistingPatientLogin
+          data={caseData}
+          update={update}
+          onLogin={loginExistingPatient}
+          onBack={logoutToPortal}
+        />
       )}
 
       {screen === "identify" && (
@@ -181,16 +585,30 @@ function App() {
       {screen === "case" && (
         <div className="workspace">
           <aside>
-            <h3>Case Progress</h3>
+            <h3>{t(caseData.patient.language, "caseProgress")}</h3>
+            <div className="progress-note">
+              {section === "review"
+                ? (caseData.patient.language === "Hindi" ? "लगभग पूरा — समीक्षा के लिए तैयार" : "Almost done — ready for review")
+                : (caseData.patient.language === "Hindi" ? "आपकी जानकारी अपने आप सेव हो रही है।" : "Your progress is saved automatically.")}
+            </div>
             {sections.map(([id, label]) => (
               <button
                 key={id}
                 className={section === id ? "active" : ""}
                 onClick={() => setSection(id)}
               >
-                {label}
+                {label === "Chief Complaint" ? t(caseData.patient.language, "chiefComplaint")
+                  : label === "History of Present Illness" ? t(caseData.patient.language, "hpi")
+                  : label === "Review & Submit" ? t(caseData.patient.language, "reviewSubmit")
+                  : label}
               </button>
             ))}
+            <button
+              className={section === "documents" ? "active" : ""}
+              onClick={() => setSection("documents")}
+            >
+              {t(caseData.patient.language, "uploadDocuments")}
+            </button>
           </aside>
 
           <main>
@@ -200,6 +618,16 @@ function App() {
               <span>{caseData.patient.gender}</span>
               <span>{caseData.patient.language}</span>
               <span>Mode: {caseData.mode}</span>
+              <label className="inline-language">
+                {t(caseData.patient.language, "language")}
+                <select
+                  value={caseData.patient.language}
+                  onChange={e => update("patient.language", e.target.value)}
+                >
+                  <option>English</option>
+                  <option>Hindi</option>
+                </select>
+              </label>
             </div>
 
             {section === "complaint" && (
@@ -244,14 +672,23 @@ function App() {
             {section === "ayush" && (
               <AYUSHSection data={caseData.ayush} update={update} />
             )}
+            {section === "documents" && (
+              <DocumentsSection
+                documents={caseData.documents}
+                addDocuments={addDocuments}
+                removeDocument={removeDocument}
+                setDocumentCategory={setDocumentCategory}
+                onContinue={() => setSection("complaint")}
+              />
+            )}
             {section === "review" && (
               <Review data={caseData} redFlag={redFlag} onSubmit={submitCase} />
             )}
 
-            {section !== "review" && (
+            {section !== "review" && section !== "documents" && (
               <div className="navigation">
-                <button onClick={previous}>← Previous</button>
-                <button onClick={next}>Save & Continue →</button>
+                <button onClick={previous}>{t(caseData.patient.language, "previous")}</button>
+                <button onClick={next}>{t(caseData.patient.language, "saveContinue")}</button>
               </div>
             )}
           </main>
@@ -265,12 +702,334 @@ function App() {
   );
 }
 
+
+function PatientPortal({ data, update, onChoose }) {
+  const language = data.patient.language || "English";
+
+  return (
+    <main className="single portal-screen">
+      <div className="portal-topline">
+        <div className="portal-badge">{t(language, "portalBadge")}</div>
+        <label className="language-picker">
+          {t(language, "language")}
+          <select
+            value={language}
+            onChange={e => update("patient.language", e.target.value)}
+          >
+            <option>English</option>
+            <option>Hindi</option>
+          </select>
+        </label>
+      </div>
+
+      <h1>{t(language, "welcome")}</h1>
+      <p className="lead">{t(language, "subtitle")}</p>
+
+      <div className="patient-choice-grid">
+        <button className="choice-card" onClick={() => onChoose("new")}>
+          <div className="choice-icon">＋</div>
+          <h2>{t(language, "newPatient")}</h2>
+          <p>{t(language, "newPatientDesc")}</p>
+          <span>{t(language, "register")}</span>
+        </button>
+
+        <button className="choice-card" onClick={() => onChoose("existing")}>
+          <div className="choice-icon">↪</div>
+          <h2>{t(language, "existingPatient")}</h2>
+          <p>{t(language, "existingPatientDesc")}</p>
+          <span>{t(language, "login")}</span>
+        </button>
+      </div>
+
+      <div className="card demo-note">
+        <strong>{t(language, "prototype")}</strong>
+        <p>{t(language, "prototypeDesc")}</p>
+      </div>
+    </main>
+  );
+}
+
+function NewPatientRegistration({ data, update, onRegister, onBack }) {
+  const language = data.patient.language || "English";
+  return (
+    <main className="single auth-screen">
+      <button onClick={onBack}>{t(language, "back")}</button>
+      <div className="portal-badge">{t(language, "newBadge")}</div>
+      <h1>{t(language, "createAccount")}</h1>
+      <p>{language === "Hindi"
+        ? "क्लिनिकल हिस्ट्री शुरू करने से पहले पहचान सत्यापित करें और खाता बनाएं।"
+        : "Complete identity verification and create your account before clinical history collection."}</p>
+
+      <div className="card">
+        <h2>{language === "Hindi" ? "1. मूल जानकारी" : "1. Basic details"}</h2>
+
+        <div className="grid">
+          <label>
+            {t(language, "fullName")}
+            <input
+              value={data.patient.name}
+              onChange={e => update("patient.name", e.target.value)}
+              placeholder="Patient full name"
+            />
+          </label>
+
+          <label>
+            {t(language, "phone")}
+            <input
+              value={data.patient.phone}
+              onChange={e => update("patient.phone", e.target.value.replace(/\D/g, "").slice(0, 10))}
+              placeholder="10-digit phone number"
+              inputMode="numeric"
+            />
+          </label>
+
+          <label>
+            {t(language, "age")}
+            <input
+              type="number"
+              min="0"
+              max="130"
+              value={data.patient.age}
+              onChange={e => update("patient.age", e.target.value)}
+            />
+          </label>
+
+          <label>
+            {t(language, "gender")}
+            <select
+              value={data.patient.gender}
+              onChange={e => update("patient.gender", e.target.value)}
+            >
+              <option value="">{t(language, "select")}</option>
+              <option>Female</option>
+              <option>Male</option>
+              <option>Other</option>
+              <option>Prefer not to say</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>{language === "Hindi" ? "2. पहचान सत्यापन" : "2. Identity verification"}</h2>
+        <p>{language === "Hindi" ? "इस प्रोटोटाइप में आधार सत्यापन सिमुलेटेड है।" : "For the prototype, Aadhaar verification is simulated."}</p>
+
+        <label>
+          {t(language, "aadhaar")}
+          <input
+            value={data.patient.verificationValue}
+            onChange={e =>
+              update(
+                "patient.verificationValue",
+                e.target.value.replace(/\D/g, "").slice(0, 12)
+              )
+            }
+            placeholder="12-digit Aadhaar number"
+            inputMode="numeric"
+          />
+        </label>
+
+        <div className="verification-status">
+          <span>Government identity verification</span>
+          <strong>Demo mode</strong>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>{language === "Hindi" ? "3. अपना खाता सुरक्षित करें" : "3. Secure your account"}</h2>
+        <p>{language === "Hindi" ? "अभी पासवर्ड का उपयोग करें। बायोमेट्रिक/अंगूठा प्रमाणीकरण बाद में जोड़ा जा सकता है।" : "Use a password for now. Biometric/thumb authentication can be added later."}</p>
+
+        <label>
+          {t(language, "createPassword")}
+          <input
+            type="password"
+            value={data.patient.password || ""}
+            onChange={e => update("patient.password", e.target.value)}
+            placeholder={t(language, "passwordHint")}
+          />
+        </label>
+
+        <button className="biometric-button" disabled>
+          {t(language, "biometric")}
+        </button>
+      </div>
+
+      <button className="primary large" onClick={onRegister}>{t(language, "verifyCreate")}</button>
+    </main>
+  );
+}
+
+function ExistingPatientLogin({ data, update, onLogin, onBack }) {
+  const method = data.patient.authMethod || "password";
+  const language = data.patient.language || "English";
+
+  return (
+    <main className="single auth-screen">
+      <button onClick={onBack}>{t(language, "back")}</button>
+      <div className="portal-badge">{t(language, "existingBadge")}</div>
+      <h1>{t(language, "loginTitle")}</h1>
+      <p>{language === "Hindi" ? "अपने मौजूदा रोगी रिकॉर्ड तक पहुंचने के लिए लॉगिन करें।" : "Log in to access your existing patient record."}</p>
+
+      <label>
+        {t(language, "patientId")}
+        <input
+          value={data.patient.verificationValue}
+          onChange={e => update("patient.verificationValue", e.target.value)}
+          placeholder="Enter phone number or Patient ID"
+        />
+      </label>
+
+      <div className="option-grid auth-methods">
+        <button
+          className={method === "password" ? "selected" : ""}
+          onClick={() => update("patient.authMethod", "password")}
+        >
+          🔐 Password
+        </button>
+        <button
+          className={method === "otp" ? "selected" : ""}
+          onClick={() => update("patient.authMethod", "otp")}
+        >
+          📱 OTP
+        </button>
+      </div>
+
+      {method === "password" ? (
+        <label>
+          Password
+          <input
+            type="password"
+            value={data.patient.password || ""}
+            onChange={e => update("patient.password", e.target.value)}
+            placeholder="Enter your password"
+          />
+        </label>
+      ) : (
+        <div className="card demo-otp">
+          <strong>OTP verification</strong>
+          <p>For now the backend generates the demo OTP <strong>123456</strong>.</p>
+          <label>
+            {t(language, "enterOtp")}
+            <input
+              value={data.patient.otp || ""}
+              onChange={e => update("patient.otp", e.target.value.replace(/\D/g, "").slice(0, 6))}
+              placeholder="123456"
+              inputMode="numeric"
+            />
+          </label>
+        </div>
+      )}
+
+      <button className="primary large" onClick={onLogin}>
+        {method === "otp" && !(data.patient.otp || "").trim()
+          ? "Send Demo OTP →"
+          : "Login & Continue →"}
+      </button>
+
+      <div className="card">
+        <strong>Prototype note:</strong>
+        <p>
+          OTP and password authentication are simulated locally. No real credentials are sent
+          anywhere in this MVP.
+        </p>
+      </div>
+    </main>
+  );
+}
+
+function DocumentsSection({ documents, addDocuments, removeDocument, setDocumentCategory, onContinue }) {
+  const categories = ["Prescription", "Lab Report", "Discharge Summary", "Medical Record", "Photo", "Other"];
+
+  return (
+    <section>
+      <h1>{t("English", "documents")}</h1>
+      <p>
+        Upload previous prescriptions, lab reports, discharge summaries, medical records or photos.
+        Files are only selected in this frontend MVP; OCR and medical extraction will be integrated later.
+      </p>
+
+      <div className="upload-box">
+        <input
+          id="document-upload"
+          type="file"
+          multiple
+          accept="image/*,.pdf,.doc,.docx,.txt"
+          onChange={e => {
+            addDocuments(e.target.files);
+            e.target.value = "";
+          }}
+        />
+        <label htmlFor="document-upload" className="upload-button">
+          + Choose Files
+        </label>
+        <span>Images, PDF, DOC/DOCX, TXT • Max 10 MB per file</span>
+      </div>
+
+      {documents.length === 0 ? (
+        <div className="card">No documents uploaded yet.</div>
+      ) : (
+        <div className="document-list">
+          {documents.map(doc => (
+            <div className="document-card" key={doc.id}>
+              {doc.preview ? (
+                <img src={doc.preview} alt="" className="document-preview" />
+              ) : (
+                <div className="document-icon">FILE</div>
+              )}
+
+              <div className="document-info">
+                <strong>{doc.name}</strong>
+                <span>{formatBytes(doc.size)}</span>
+                <label>
+                  Document type
+                  <select
+                    value={doc.category}
+                    onChange={e => setDocumentCategory(doc.id, e.target.value)}
+                  >
+                    {categories.map(category => <option key={category}>{category}</option>)}
+                  </select>
+                </label>
+              </div>
+
+              <button onClick={() => removeDocument(doc.id)}>Remove</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="navigation">
+        <span />
+        <button className="primary" onClick={onContinue}>
+          Continue to Case Taking →
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function Identification({ data, update, startCase }) {
+  const language = data.patient.language || "English";
   return (
     <main className="single">
-      <h1>Patient Identification</h1>
-      <p>Enter the patient's basic information before starting the clinical history.</p>
-
+      <div className="section-topline">
+        <div>
+          <h1>{t(language, "identify")}</h1>
+          <p>{t(language, "identificationDesc")}</p>
+        </div>
+        <label className="language-picker">
+          {t(language, "language")}
+          <select value={language} onChange={e => update("patient.language", e.target.value)}>
+            <option>English</option>
+            <option>Hindi</option>
+          </select>
+        </label>
+      </div>
       <div className="grid">
         <label>
           Patient type
@@ -298,7 +1057,7 @@ function Identification({ data, update, startCase }) {
         <label>
           Gender
           <select value={data.patient.gender} onChange={e => update("patient.gender", e.target.value)}>
-            <option value="">Select</option>
+            <option value="">{t(language, "select")}</option>
             <option>Female</option>
             <option>Male</option>
             <option>Other</option>
@@ -316,7 +1075,7 @@ function Identification({ data, update, startCase }) {
         </label>
 
         <label>
-          Consultation mode
+          {t(language, "consultationMode")}
           <select value={data.mode} onChange={e => update("mode", e.target.value)}>
             <option>Allopathic</option>
             <option>AYUSH</option>
@@ -325,18 +1084,18 @@ function Identification({ data, update, startCase }) {
       </div>
 
       <section className="card">
-        <h2>Consent</h2>
+        <h2>{t(language, "consent")}</h2>
         <p>
           Consent is required before clinical history collection. This MVP records the consent state locally.
           Production ABDM consent and secure backend integration will be added separately.
         </p>
         <label className="checkbox">
           <input type="checkbox" checked={data.consent} onChange={e => update("consent", e.target.checked)} />
-          I consent to the collection and processing of my clinical history for this consultation.
+          {t(language, "consentText")}
         </label>
       </section>
 
-      <button className="primary large" onClick={startCase}>Start Clinical History →</button>
+      <button className="primary large" onClick={startCase}>{t(language, "startHistory")}</button>
     </main>
   );
 }
@@ -344,7 +1103,7 @@ function Identification({ data, update, startCase }) {
 function ComplaintSection({ data, toggle, update, setSection }) {
   return (
     <section>
-      <h1>Chief Complaint</h1>
+      <h1>{t(data.patient.language, "chiefComplaint")}</h1>
       <p>Select the main reason for today's visit. Multiple complaints can be selected.</p>
 
       <div className="option-grid">
@@ -448,7 +1207,7 @@ function HPISection({ data, update }) {
       <label>
         Patient's description
         <textarea value={data.hpi.narrative} onChange={e => update("hpi.narrative", e.target.value)}
-          placeholder="Describe what has been happening in your own words..." />
+          placeholder={t(data.patient.language, "patientDescription")} />
       </label>
     </section>
   );
@@ -571,6 +1330,10 @@ function Review({ data, redFlag, onSubmit }) {
       <Summary title="Personal History" rows={[["History", value(data.personalHistory)]]} />
 
       <Summary title="Review of Systems" rows={Object.entries(data.ros).map(([k, v]) => [k, value(v)])} />
+
+      <Summary title="Uploaded Documents" rows={[
+        ["Files", data.documents.length ? data.documents.map(d => `${d.name} (${d.category})`).join(", ") : "No documents uploaded"]
+      ]} />
 
       {data.mode === "AYUSH" && (
         <Summary title="AYUSH — Dashavidha Pariksha" rows={Object.entries(data.ayush).map(([k, v]) => [k, value(v)])} />

@@ -1,43 +1,458 @@
 * { box-sizing: border-box; }
-body { margin: 0; font-family: Arial, sans-serif; background: #f5f5f5; color: #111; }
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #f5f5f5;
+  color: #111;
+}
+
 button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
+
 .app { min-height: 100vh; }
-header { min-height: 60px; padding: 12px 20px; background: #222; color: white; display: flex; align-items: center; gap: 18px; }
+
+header {
+  min-height: 60px;
+  padding: 12px 20px;
+  background: #222;
+  color: white;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
 header span { flex: 1; opacity: .8; }
-header button { background: white; color: #111; border: 0; padding: 9px 14px; }
-main.single { max-width: 1000px; margin: 30px auto; padding: 24px; background: white; }
-.workspace { display: grid; grid-template-columns: 260px 1fr; max-width: 1400px; margin: 20px auto; gap: 20px; padding: 0 20px; }
+
+header button {
+  background: white;
+  color: #111;
+  border: 0;
+  padding: 9px 14px;
+}
+
+main.single {
+  max-width: 1000px;
+  margin: 30px auto;
+  padding: 24px;
+  background: white;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  max-width: 1400px;
+  margin: 20px auto;
+  gap: 20px;
+  padding: 0 20px;
+}
+
 aside, main section, .single { background: white; }
-aside { padding: 18px; height: fit-content; }
-aside button { display: block; width: 100%; text-align: left; margin: 5px 0; padding: 12px; border: 1px solid #ddd; background: white; }
-aside button.active { background: #222; color: white; }
+
+aside {
+  padding: 18px;
+  height: fit-content;
+}
+
+aside button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin: 5px 0;
+  padding: 12px;
+  border: 1px solid #ddd;
+  background: white;
+}
+
+aside button.active {
+  background: #222;
+  color: white;
+}
+
 main { min-width: 0; }
 main section { padding: 24px; }
-.patient-bar { display: flex; flex-wrap: wrap; gap: 12px; padding: 12px 16px; background: white; border-bottom: 1px solid #ddd; }
-.patient-bar span { padding: 5px 8px; border: 1px solid #ddd; }
-.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-label { display: flex; flex-direction: column; gap: 6px; margin: 14px 0; font-weight: 600; }
-input, textarea, select { width: 100%; padding: 11px; border: 1px solid #aaa; background: white; }
-textarea { min-height: 120px; resize: vertical; }
+
+.patient-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 16px;
+  background: white;
+  border-bottom: 1px solid #ddd;
+}
+
+.patient-bar span {
+  padding: 5px 8px;
+  border: 1px solid #ddd;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 14px 0;
+  font-weight: 600;
+}
+
+input, textarea, select {
+  width: 100%;
+  padding: 11px;
+  border: 1px solid #aaa;
+  background: white;
+}
+
+textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
 .big-text { min-height: 280px; }
-.option-grid { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; }
-.option-grid button { padding: 12px 16px; border: 1px solid #aaa; background: white; }
-.option-grid button.selected { background: #222; color: white; }
-.card, .summary { border: 1px solid #ddd; padding: 16px; margin: 18px 0; background: #fafafa; }
-.checkbox { flex-direction: row; align-items: center; }
+
+.option-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.option-grid button {
+  padding: 12px 16px;
+  border: 1px solid #aaa;
+  background: white;
+}
+
+.option-grid button.selected {
+  background: #222;
+  color: white;
+}
+
+.card, .summary {
+  border: 1px solid #ddd;
+  padding: 16px;
+  margin: 18px 0;
+  background: #fafafa;
+}
+
+.checkbox {
+  flex-direction: row;
+  align-items: center;
+}
+
 .checkbox input { width: auto; }
-.navigation { display: flex; justify-content: space-between; padding: 18px 24px; background: white; border-top: 1px solid #ddd; }
-.navigation button, button { padding: 10px 14px; border: 1px solid #999; background: white; }
-button.primary { background: #222; color: white; border-color: #222; }
+
+.navigation {
+  display: flex;
+  justify-content: space-between;
+  padding: 18px 24px;
+  background: white;
+  border-top: 1px solid #ddd;
+}
+
+.navigation button, button {
+  padding: 10px 14px;
+  border: 1px solid #999;
+  background: white;
+}
+
+button.primary {
+  background: #222;
+  color: white;
+  border-color: #222;
+}
+
 button.large { padding: 14px 22px; }
-.alert { margin: 15px 20px; padding: 14px; border: 2px solid #a00; background: #fff; display: flex; gap: 12px; align-items: center; }
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.alert {
+  margin: 15px 20px;
+  padding: 14px;
+  border: 2px solid #a00;
+  background: #fff;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
 .alert span { flex: 1; }
+
 .summary h2 { margin-top: 0; }
-.summary-row { display: grid; grid-template-columns: 240px 1fr; padding: 9px 0; border-top: 1px solid #ddd; gap: 10px; }
+
+.summary-row {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  padding: 9px 0;
+  border-top: 1px solid #ddd;
+  gap: 10px;
+}
+
+.upload-box {
+  border: 2px dashed #999;
+  padding: 28px;
+  margin: 20px 0;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.upload-box input { display: none; }
+
+.upload-button {
+  display: inline-block;
+  padding: 12px 18px;
+  border: 1px solid #222;
+  background: #222;
+  color: white;
+  cursor: pointer;
+}
+
+.document-list {
+  display: grid;
+  gap: 12px;
+}
+
+.document-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid #ddd;
+  background: white;
+}
+
+.document-preview {
+  width: 90px;
+  height: 90px;
+  object-fit: cover;
+  border: 1px solid #ddd;
+}
+
+.document-icon {
+  width: 90px;
+  height: 90px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #ddd;
+  background: #f3f3f3;
+  font-weight: 700;
+}
+
+.document-info {
+  flex: 1;
+  min-width: 220px;
+}
+
+.document-info > span {
+  display: block;
+  margin-top: 4px;
+  color: #555;
+}
+
+.document-info label { margin: 8px 0 0; }
+
+/* Patient authentication flow */
+
+.portal-screen,
+.auth-screen {
+  max-width: 900px !important;
+}
+
+.portal-screen {
+  margin-top: 50px !important;
+}
+
+.portal-badge {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 6px 10px;
+  border: 1px solid #222;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .08em;
+}
+
+.lead {
+  max-width: 680px;
+  color: #555;
+  font-size: 18px;
+  line-height: 1.5;
+}
+
+.patient-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin: 30px 0;
+}
+
+.choice-card {
+  text-align: left;
+  padding: 26px;
+  min-height: 230px;
+  border: 1px solid #ccc;
+  background: white;
+  transition: transform .15s ease, border-color .15s ease;
+}
+
+.choice-card:hover {
+  transform: translateY(-2px);
+  border-color: #222;
+}
+
+.choice-card h2 {
+  margin: 12px 0 8px;
+}
+
+.choice-card p {
+  color: #555;
+  line-height: 1.5;
+}
+
+.choice-card span {
+  display: block;
+  margin-top: 22px;
+  font-weight: 700;
+}
+
+.choice-icon {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #222;
+  font-size: 24px;
+}
+
+.demo-note {
+  margin-top: 30px;
+}
+
+.demo-note p,
+.demo-otp p {
+  margin-bottom: 0;
+  color: #555;
+}
+
+.verification-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #ddd;
+  background: #fff;
+}
+
+.verification-status strong {
+  font-size: 13px;
+}
+
+.biometric-button {
+  width: 100%;
+  margin-top: 8px;
+  text-align: left;
+  padding: 13px;
+}
+
+.auth-methods {
+  margin: 10px 0 20px;
+}
+
+.demo-otp {
+  border-left: 4px solid #222;
+}
+
 @media (max-width: 800px) {
   .workspace { grid-template-columns: 1fr; }
   .grid { grid-template-columns: 1fr; }
   .summary-row { grid-template-columns: 1fr; }
   header { flex-wrap: wrap; }
+
+  .patient-choice-grid {
+    grid-template-columns: 1fr;
+  }
+
+  main.single {
+    margin: 15px;
+  }
+}
+
+
+/* Participant 2 UX improvements */
+
+.portal-topline,
+.section-topline {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.language-picker {
+  min-width: 180px;
+  margin: 0;
+}
+
+.language-picker select {
+  margin-top: 5px;
+}
+
+.inline-language {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 5px 8px;
+  font-weight: 600;
+  border: 1px solid #ddd;
+}
+
+.inline-language select {
+  width: auto;
+  padding: 5px 8px;
+  border: 0;
+}
+
+.progress-note {
+  margin: 10px 0 16px;
+  padding: 10px;
+  background: #f5f5f5;
+  border: 1px solid #ddd;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.section-topline h1 {
+  margin-bottom: 6px;
+}
+
+.section-topline p {
+  margin-top: 0;
+  color: #555;
+}
+
+@media (max-width: 800px) {
+  .portal-topline,
+  .section-topline {
+    flex-direction: column;
+  }
+
+  .language-picker {
+    width: 100%;
+  }
+
+  .inline-language {
+    width: 100%;
+    justify-content: space-between;
+  }
 }
