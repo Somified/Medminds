@@ -199,6 +199,11 @@ function t(language, key) {
   return (UI_TEXT[language] || UI_TEXT.English)[key] || UI_TEXT.English[key] || key;
 }
 
+// Combined step order used for the case-taking progress indicator.
+// Mirrors the order the steps are rendered in the sidebar (documents last),
+// so the progress count always matches what the patient sees on screen.
+const PROGRESS_STEPS = [...sections.map(([id]) => id), "documents"];
+
 function App() {
   const [caseData, setCaseData] = useState(() => {
     const saved = localStorage.getItem("medikiosk-case");
@@ -206,7 +211,7 @@ function App() {
   });
   const [screen, setScreen] = useState("portal");
   const [section, setSection] = useState("complaint");
-  const [alert, setAlert] = useState(null);
+  const [alert, setAlert] = useState(null); // { message, severity: "critical" | "warning" | "info" }
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -220,7 +225,12 @@ function App() {
   }, [hasChestPain, hasBreathlessness]);
 
   useEffect(() => {
-    if (redFlag) setAlert("Potential emergency symptoms detected. Please alert triage staff immediately.");
+    if (redFlag) {
+      setAlert({
+        message: "Potential emergency symptoms detected. Please alert triage staff immediately.",
+        severity: "critical"
+      });
+    }
   }, [redFlag]);
 
   const update = (path, value) => {
@@ -283,19 +293,19 @@ function App() {
     const aadhaar = p.verificationValue.replace(/\s/g, "");
 
     if (!p.name.trim()) {
-      setAlert("Enter the patient's full name.");
+      setAlert({ message: "Enter the patient's full name.", severity: "warning" });
       return;
     }
     if (!/^\d{10}$/.test(p.phone)) {
-      setAlert("Enter a valid 10-digit phone number.");
+      setAlert({ message: "Enter a valid 10-digit phone number.", severity: "warning" });
       return;
     }
     if (!/^\d{12}$/.test(aadhaar)) {
-      setAlert("Enter a valid 12-digit Aadhaar number.");
+      setAlert({ message: "Enter a valid 12-digit Aadhaar number.", severity: "warning" });
       return;
     }
     if ((p.password || "").length < 6) {
-      setAlert("Password must be at least 6 characters.");
+      setAlert({ message: "Password must be at least 6 characters.", severity: "warning" });
       return;
     }
 
@@ -330,7 +340,7 @@ function App() {
       setAlert(null);
       setScreen("identify");
     } catch (error) {
-      setAlert(error.message);
+      setAlert({ message: error.message, severity: "warning" });
     }
   };
 
@@ -339,7 +349,7 @@ function App() {
     const credential = p.verificationValue.trim();
 
     if (!credential) {
-      setAlert("Enter your phone number or Patient ID.");
+      setAlert({ message: "Enter your phone number or Patient ID.", severity: "warning" });
       return;
     }
 
@@ -348,7 +358,7 @@ function App() {
 
       if (p.authMethod === "password") {
         if ((p.password || "").length < 6) {
-          setAlert("Enter a password of at least 6 characters.");
+          setAlert({ message: "Enter a password of at least 6 characters.", severity: "warning" });
           return;
         }
 
@@ -365,7 +375,7 @@ function App() {
         if (!response.ok) throw new Error(result.error || "Login failed.");
       } else {
         if (!/^\d{10}$/.test(credential)) {
-          setAlert("For OTP login, enter the registered 10-digit phone number.");
+          setAlert({ message: "For OTP login, enter the registered 10-digit phone number.", severity: "warning" });
           return;
         }
 
@@ -378,7 +388,7 @@ function App() {
           const requested = await response.json();
           if (!response.ok) throw new Error(requested.error || "Could not request OTP.");
 
-          setAlert("Demo OTP generated: 123456. Enter it and press Login again.");
+          setAlert({ message: "Demo OTP generated: 123456. Enter it and press Login again.", severity: "info" });
           return;
         }
 
@@ -413,8 +423,39 @@ function App() {
       setAlert(null);
       setScreen("identify");
     } catch (error) {
-      setAlert(error.message);
+      setAlert({ message: error.message, severity: "warning" });
     }
+  };
+
+  // Frontend-only demo authentication for Participant 2 testing.
+  // This is intentionally separate from the real backend login flow.
+  const demoLoginExistingPatient = () => {
+    const demoPatient = {
+      ...cloneEmptyCase().patient,
+      type: "existing",
+      verified: true,
+      verificationMethod: "phone",
+      verificationValue: "DEMO-001",
+      phone: "9999999999",
+      password: "",
+      authMethod: "password",
+      otp: "",
+      abhaId: "DEMO-ABHA-001",
+      name: "Demo Patient",
+      age: "35",
+      gender: "Prefer not to say",
+      language: caseData.patient.language || "English"
+    };
+
+    setCaseData(prev => ({
+      ...prev,
+      patient: demoPatient,
+      status: "draft"
+    }));
+
+    // Do not create a fake token or call the backend.
+    setAlert(null);
+    setScreen("identify");
   };
 
   const logoutToPortal = () => {
@@ -438,7 +479,7 @@ function App() {
       }));
 
     if (incoming.some(file => file.size > maxSize)) {
-      setAlert("Some files were skipped because they are larger than 10 MB.");
+      setAlert({ message: "Some files were skipped because they are larger than 10 MB.", severity: "warning" });
     }
 
     setCaseData(prev => ({
@@ -468,11 +509,11 @@ function App() {
 
   const startCase = () => {
     if (!caseData.patient.name && !caseData.patient.abhaId) {
-      setAlert("Enter at least the patient's name or ABHA ID.");
+      setAlert({ message: "Enter at least the patient's name or ABHA ID.", severity: "warning" });
       return;
     }
     if (!caseData.consent) {
-      setAlert("Consent is required before clinical history collection.");
+      setAlert({ message: "Consent is required before clinical history collection.", severity: "warning" });
       return;
     }
     setScreen("case");
@@ -513,7 +554,7 @@ function App() {
           throw new Error(result.error || "Backend case save failed.");
         }
       } catch (error) {
-        setAlert(`Saved locally, but backend save failed: ${error.message}`);
+        setAlert({ message: `Saved locally, but backend save failed: ${error.message}`, severity: "warning" });
       }
     }
 
@@ -529,6 +570,14 @@ function App() {
     setAlert(null);
   };
 
+  const alertHeading = alert
+    ? alert.severity === "critical"
+      ? "Priority Alert"
+      : alert.severity === "info"
+      ? "Notice"
+      : "Please check"
+    : "";
+
   return (
     <div className="app">
       <header>
@@ -541,10 +590,13 @@ function App() {
       </header>
 
       {alert && (
-        <div className="alert" role="alert">
-          <strong>Priority Alert</strong>
-          <span>{alert}</span>
-          <button onClick={() => setAlert(null)}>Dismiss</button>
+        <div
+          className={`alert alert-${alert.severity}`}
+          role={alert.severity === "critical" ? "alert" : "status"}
+        >
+          <strong>{alertHeading}</strong>
+          <span>{alert.message}</span>
+          <button className="ghost btn-small" onClick={() => setAlert(null)}>Dismiss</button>
         </div>
       )}
 
@@ -570,6 +622,7 @@ function App() {
           data={caseData}
           update={update}
           onLogin={loginExistingPatient}
+          onDemoLogin={demoLoginExistingPatient}
           onBack={logoutToPortal}
         />
       )}
@@ -586,29 +639,66 @@ function App() {
         <div className="workspace">
           <aside>
             <h3>{t(caseData.patient.language, "caseProgress")}</h3>
+
+            {(() => {
+              const currentStepIndex = PROGRESS_STEPS.indexOf(section);
+              const totalSteps = PROGRESS_STEPS.length;
+              const percent = ((currentStepIndex + 1) / totalSteps) * 100;
+              const progressLabel = caseData.patient.language === "Hindi"
+                ? `चरण ${currentStepIndex + 1} / ${totalSteps}`
+                : `Section ${currentStepIndex + 1} of ${totalSteps}`;
+              return (
+                <div className="step-progress">
+                  <div className="step-progress-track">
+                    <div className="step-progress-fill" style={{ width: `${percent}%` }} />
+                  </div>
+                  <span className="step-progress-label">{progressLabel}</span>
+                </div>
+              );
+            })()}
+
             <div className="progress-note">
               {section === "review"
                 ? (caseData.patient.language === "Hindi" ? "लगभग पूरा — समीक्षा के लिए तैयार" : "Almost done — ready for review")
                 : (caseData.patient.language === "Hindi" ? "आपकी जानकारी अपने आप सेव हो रही है।" : "Your progress is saved automatically.")}
             </div>
-            {sections.map(([id, label]) => (
-              <button
-                key={id}
-                className={section === id ? "active" : ""}
-                onClick={() => setSection(id)}
-              >
-                {label === "Chief Complaint" ? t(caseData.patient.language, "chiefComplaint")
-                  : label === "History of Present Illness" ? t(caseData.patient.language, "hpi")
-                  : label === "Review & Submit" ? t(caseData.patient.language, "reviewSubmit")
-                  : label}
-              </button>
-            ))}
-            <button
-              className={section === "documents" ? "active" : ""}
-              onClick={() => setSection("documents")}
-            >
-              {t(caseData.patient.language, "uploadDocuments")}
-            </button>
+
+            {sections.map(([id, label]) => {
+              const idx = PROGRESS_STEPS.indexOf(id);
+              const currentStepIndex = PROGRESS_STEPS.indexOf(section);
+              const state = idx < currentStepIndex ? "completed" : idx === currentStepIndex ? "current" : "upcoming";
+              const displayLabel = label === "Chief Complaint" ? t(caseData.patient.language, "chiefComplaint")
+                : label === "History of Present Illness" ? t(caseData.patient.language, "hpi")
+                : label === "Review & Submit" ? t(caseData.patient.language, "reviewSubmit")
+                : label;
+              return (
+                <button
+                  key={id}
+                  className={`step-item step-${state}`}
+                  aria-current={state === "current" ? "step" : undefined}
+                  onClick={() => setSection(id)}
+                >
+                  <span className="step-marker" aria-hidden="true">{state === "completed" ? "✓" : idx + 1}</span>
+                  <span className="step-text">{displayLabel}</span>
+                </button>
+              );
+            })}
+
+            {(() => {
+              const idx = PROGRESS_STEPS.indexOf("documents");
+              const currentStepIndex = PROGRESS_STEPS.indexOf(section);
+              const state = idx < currentStepIndex ? "completed" : idx === currentStepIndex ? "current" : "upcoming";
+              return (
+                <button
+                  className={`step-item step-${state}`}
+                  aria-current={state === "current" ? "step" : undefined}
+                  onClick={() => setSection("documents")}
+                >
+                  <span className="step-marker" aria-hidden="true">{state === "completed" ? "✓" : idx + 1}</span>
+                  <span className="step-text">{t(caseData.patient.language, "uploadDocuments")}</span>
+                </button>
+              );
+            })()}
           </aside>
 
           <main>
@@ -687,8 +777,8 @@ function App() {
 
             {section !== "review" && section !== "documents" && (
               <div className="navigation">
-                <button onClick={previous}>{t(caseData.patient.language, "previous")}</button>
-                <button onClick={next}>{t(caseData.patient.language, "saveContinue")}</button>
+                <button className="ghost" onClick={previous}>{t(caseData.patient.language, "previous")}</button>
+                <button className="primary" onClick={next}>{t(caseData.patient.language, "saveContinue")}</button>
               </div>
             )}
           </main>
@@ -753,7 +843,7 @@ function NewPatientRegistration({ data, update, onRegister, onBack }) {
   const language = data.patient.language || "English";
   return (
     <main className="single auth-screen">
-      <button onClick={onBack}>{t(language, "back")}</button>
+      <button className="ghost" onClick={onBack}>{t(language, "back")}</button>
       <div className="portal-badge">{t(language, "newBadge")}</div>
       <h1>{t(language, "createAccount")}</h1>
       <p>{language === "Hindi"
@@ -859,13 +949,13 @@ function NewPatientRegistration({ data, update, onRegister, onBack }) {
   );
 }
 
-function ExistingPatientLogin({ data, update, onLogin, onBack }) {
+function ExistingPatientLogin({ data, update, onLogin, onDemoLogin, onBack }) {
   const method = data.patient.authMethod || "password";
   const language = data.patient.language || "English";
 
   return (
     <main className="single auth-screen">
-      <button onClick={onBack}>{t(language, "back")}</button>
+      <button className="ghost" onClick={onBack}>{t(language, "back")}</button>
       <div className="portal-badge">{t(language, "existingBadge")}</div>
       <h1>{t(language, "loginTitle")}</h1>
       <p>{language === "Hindi" ? "अपने मौजूदा रोगी रिकॉर्ड तक पहुंचने के लिए लॉगिन करें।" : "Log in to access your existing patient record."}</p>
@@ -926,6 +1016,17 @@ function ExistingPatientLogin({ data, update, onLogin, onBack }) {
           : "Login & Continue →"}
       </button>
 
+      <div className="card demo-login-card">
+        <strong>Frontend demo</strong>
+        <p>
+          Backend authentication is not running yet. Use the demo login to preview the
+          real patient workflow with dummy data.
+        </p>
+        <button className="secondary-demo" onClick={onDemoLogin}>
+          Demo Login — View Patient Dashboard →
+        </button>
+      </div>
+
       <div className="card">
         <strong>Prototype note:</strong>
         <p>
@@ -965,6 +1066,10 @@ function DocumentsSection({ documents, addDocuments, removeDocument, setDocument
         <span>Images, PDF, DOC/DOCX, TXT • Max 10 MB per file</span>
       </div>
 
+      <p className="privacy-note">
+        <span aria-hidden="true">🔒</span> Uploaded documents are used only for this consultation.
+      </p>
+
       {documents.length === 0 ? (
         <div className="card">No documents uploaded yet.</div>
       ) : (
@@ -991,7 +1096,7 @@ function DocumentsSection({ documents, addDocuments, removeDocument, setDocument
                 </label>
               </div>
 
-              <button onClick={() => removeDocument(doc.id)}>Remove</button>
+              <button className="ghost ghost-danger" onClick={() => removeDocument(doc.id)}>Remove</button>
             </div>
           ))}
         </div>
@@ -1291,7 +1396,7 @@ function Review({ data, redFlag, onSubmit }) {
       <p>Review the structured history before submission.</p>
 
       {redFlag && (
-        <div className="alert">
+        <div className="alert alert-critical" role="alert">
           <strong>Priority alert:</strong>
           <span>Chest pain with breathlessness has been selected. This should be routed to triage staff.</span>
         </div>
