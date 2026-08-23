@@ -17,6 +17,7 @@ from Clinical_Questions import (
     QUESTION_TREES,
     get_question_tree,
 )
+from red_flag_detector import detect_red_flag
 
 
 class ClinicalEngine:
@@ -59,6 +60,12 @@ class ClinicalEngine:
         self.finished = False
 
         self.outcome = None
+
+        self.red_flag_result = None
+
+        self.red_flag_result = None
+
+        self.red_flag_result = None
 
     # ========================================================
     # CURRENT QUESTION
@@ -430,6 +437,22 @@ class ClinicalEngine:
         )
 
         # ----------------------------------------------------
+        # CHECK FOR RED FLAG
+        # ----------------------------------------------------
+
+        detected_red_flag = detect_red_flag(
+            self.tree,
+            question,
+            normalized_answer,
+            next_node,
+        )
+
+        if detected_red_flag.is_red_flag:
+            self.red_flag_result = detected_red_flag
+        else:
+            self.red_flag_result = None
+
+        # ----------------------------------------------------
         # CHECK OUTCOME
         # ----------------------------------------------------
 
@@ -506,6 +529,20 @@ class ClinicalEngine:
         return list(self.answer_history)
 
     # ========================================================
+    # GET RED FLAG RESULT
+    # ========================================================
+
+    def get_red_flag_result(self):
+        """
+        Return the most recent red-flag result.
+
+        Returns:
+            RedFlagResult | None
+        """
+
+        return self.red_flag_result
+
+    # ========================================================
     # GET STATE
     # ========================================================
 
@@ -522,6 +559,7 @@ class ClinicalEngine:
             "finished": self.finished,
             "question": self.get_current_question(),
             "outcome": self.outcome,
+            "red_flag": self.red_flag_result,
             "answer_history": self.get_answer_history(),
         }
 
@@ -541,3 +579,5 @@ class ClinicalEngine:
         self.finished = False
 
         self.outcome = None
+
+        self.red_flag_result = None

@@ -23,6 +23,13 @@ import pytest
 
 from clinical_engine import ClinicalEngine
 from Clinical_Questions import QUESTION_TREES
+from red_flag_detector import (
+    EMERGENCY,
+    NONE,
+    URGENT,
+    RedFlagResult,
+    detect_red_flag,
+)
 
 
 # ============================================================
@@ -1493,3 +1500,471 @@ class TestReturnValues:
 
         assert result is not None
         assert result == engine.get_outcome()
+
+# ============================================================
+# RED FLAG DETECTOR
+# ============================================================
+
+class TestRedFlagDetector:
+
+    def test_emergency_red_flag_result(self):
+        tree = QUESTION_TREES["headache"]
+        question = tree["questions"]["headache_q1"]
+
+        result = detect_red_flag(
+            tree,
+            question,
+            "yes",
+            "headache_emergency_thunderclap",
+        )
+
+        assert isinstance(result, RedFlagResult)
+        assert result.is_red_flag is True
+        assert result.severity == EMERGENCY
+        assert result.red_flag_type == "headache_emergency_thunderclap"
+        assert result.message is not None
+        assert result.recommended_action is not None
+
+    def test_urgent_red_flag_result(self):
+        tree = QUESTION_TREES["back_pain"]
+        question = tree["questions"]["back_q2"]
+
+        result = detect_red_flag(
+            tree,
+            question,
+            "yes",
+            "back_urgent_trauma",
+        )
+
+        assert result.is_red_flag is True
+        assert result.severity == URGENT
+        assert result.red_flag_type == "back_urgent_trauma"
+
+    def test_normal_answer_is_not_red_flag(self):
+        tree = QUESTION_TREES["headache"]
+        question = tree["questions"]["headache_q1"]
+
+        result = detect_red_flag(
+            tree,
+            question,
+            "no",
+            "headache_q2",
+        )
+
+        assert result.is_red_flag is False
+        assert result.severity == NONE
+        assert result.red_flag_type is None
+        assert result.message is None
+        assert result.recommended_action is None
+
+    def test_routine_outcome_is_not_red_flag(self):
+        tree = QUESTION_TREES["headache"]
+        question = tree["questions"]["headache_q6"]
+
+        result = detect_red_flag(
+            tree,
+            question,
+            "no",
+            "headache_routine",
+        )
+
+        assert result.is_red_flag is False
+        assert result.severity == NONE
+
+    def test_detector_does_not_search_text_for_keywords(self):
+        tree = QUESTION_TREES["cough"]
+        question = tree["questions"]["cough_q3"]
+
+        # The question contains the word "blood", but "no" follows
+        # the normal structured transition to cough_q4.
+        result = detect_red_flag(
+            tree,
+            question,
+            "no",
+            "cough_q4",
+        )
+
+        assert result.is_red_flag is False
+        assert result.severity == NONE
+
+
+# ============================================================
+# RED FLAG INTEGRATION
+# ============================================================
+
+class TestRedFlagIntegration:
+
+    @pytest.mark.parametrize(
+        "complaint,answers,expected_type,expected_severity",
+        [
+            (
+                "fever",
+                ["less_than_24h", "38", "yes"],
+                "fever_emergency_breathing",
+                EMERGENCY,
+            ),
+            (
+                "abdominal_pain",
+                ["upper_right", "yes", "yes"],
+                "abdominal_emergency_severe",
+                EMERGENCY,
+            ),
+            (
+                "headache",
+                ["yes"],
+                "headache_emergency_thunderclap",
+                EMERGENCY,
+            ),
+            (
+                "cough",
+                ["less_than_1_week", "yes"],
+                "cough_emergency_breathing",
+                EMERGENCY,
+            ),
+            (
+                "difficulty_breathing",
+                ["yes"],
+                "breathing_emergency_severe",
+                EMERGENCY,
+            ),
+            (
+                "chest_pain",
+                ["yes", "yes"],
+                "chest_emergency",
+                EMERGENCY,
+            ),
+            (
+                "vomiting",
+                ["less_than_24h", "yes"],
+                "vomiting_emergency_blood",
+                EMERGENCY,
+            ),
+            (
+                "nausea",
+                ["less_than_24h", "yes"],
+                "nausea_emergency_blood",
+                EMERGENCY,
+            ),
+            (
+                "diarrhea",
+                ["less_than_2_days", "yes"],
+                "diarrhea_emergency_blood",
+                EMERGENCY,
+            ),
+            (
+                "back_pain",
+                ["lower", "no", "yes", "yes"],
+                "back_emergency_cord",
+                EMERGENCY,
+            ),
+        ],
+    )
+    def test_each_tree_detects_red_flag(
+        self,
+        complaint,
+        answers,
+        expected_type,
+        expected_severity,
+    ):
+        engine = ClinicalEngine(complaint)
+
+        result = run_answers(engine, answers)
+
+        assert result["urgency"] == "emergency"
+
+        red_flag = engine.get_red_flag_result()
+
+        assert red_flag is not None
+        assert red_flag.is_red_flag is True
+        assert red_flag.red_flag_type == expected_type
+        assert red_flag.severity == expected_severity
+
+        # The red flag must also be available in the engine state.
+        state = engine.get_state()
+        assert state["red_flag"] == red_flag
+
+    @pytest.mark.parametrize(
+        "complaint,answers",
+        [
+            (
+                "fever",
+                [
+                    "less_than_24h",
+                    "38",
+                    "no",
+                    "no",
+                    "no",
+                    "no",
+                    "no",
+                    "no",
+                    "no",
+                    "no",
+                ],
+            ),
+            (
+                "abdominal_pain",
+                [
+                    "generalized",
+                    "no",
+                    "no",
+                    "no",
+                    "no",
+                    "no",
+                ],
+            ),
+            (
+                "headache",
+                ["no", "more_than_week", "no", "no", "no"],
+            ),
+            (
+                "cough",
+                [
+                    "less_than_1_week",
+                    "no",
+                    "no",
+                    "no",
+                    "no",
+                    "no",
+                ],
+            ),
+            (
+                "difficulty_breathing",
+                ["no", "no", "no", "no"],
+            ),
+            (
+                "chest_pain",
+                ["no", "no", "no", "yes"],
+            ),
+            (
+                "vomiting",
+                ["less_than_24h", "no", "no", "no", "no"],
+            ),
+            (
+                "nausea",
+                [
+                    "1_to_3_days",
+                    "no",
+                    "no",
+                    "no",
+                    "no",
+                    "no",
+                ],
+            ),
+            (
+                "diarrhea",
+                [
+                    "less_than_2_days",
+                    "no",
+                    "no",
+                    "no",
+                    "no",
+                    "no",
+                ],
+            ),
+            (
+                "back_pain",
+                ["upper", "no", "no", "no", "no"],
+            ),
+        ],
+    )
+    def test_each_tree_normal_path_has_no_red_flag(
+        self,
+        complaint,
+        answers,
+    ):
+        engine = ClinicalEngine(complaint)
+
+        run_answers(engine, answers)
+
+        assert engine.get_red_flag_result() is None
+        assert engine.get_outcome()["urgency"] == "routine"
+
+    def test_red_flag_is_recorded_in_answer_history(self):
+        engine = ClinicalEngine("headache")
+
+        engine.submit_answer("yes")
+
+        history = engine.get_answer_history()
+
+        assert len(history) == 1
+        assert history[0]["question_id"] == "headache_q1"
+        assert history[0]["answer"] == "yes"
+
+        red_flag = engine.get_red_flag_result()
+
+        assert red_flag is not None
+        assert red_flag.red_flag_type == "headache_emergency_thunderclap"
+
+    def test_red_flag_terminates_assessment(self):
+        engine = ClinicalEngine("difficulty_breathing")
+
+        result = engine.submit_answer("yes")
+
+        assert result["urgency"] == "emergency"
+        assert engine.is_finished() is True
+        assert engine.get_current_question() is None
+
+        with pytest.raises(RuntimeError):
+            engine.submit_answer("no")
+
+    def test_red_flag_after_normal_questions(self):
+        engine = ClinicalEngine("fever")
+
+        engine.submit_answer("1_to_3_days")
+        engine.submit_answer("38")
+        result = engine.submit_answer("no")
+        assert result is None
+
+        result = engine.submit_answer("yes")
+
+        assert result["urgency"] == "emergency"
+        assert engine.get_red_flag_result().is_red_flag is True
+        assert len(engine.get_answer_history()) == 4
+
+    def test_multiple_potential_red_flags_stop_at_first_terminal_flag(self):
+        engine = ClinicalEngine("fever")
+
+        # The first red flag ends the tree. A second answer cannot
+        # be submitted until reset.
+        engine.submit_answer("less_than_24h")
+        engine.submit_answer("38")
+        engine.submit_answer("yes")
+
+        assert engine.is_finished() is True
+        assert engine.get_red_flag_result() is not None
+
+        with pytest.raises(RuntimeError):
+            engine.submit_answer("yes")
+
+    def test_reset_clears_red_flag(self):
+        engine = ClinicalEngine("headache")
+
+        engine.submit_answer("yes")
+
+        assert engine.get_red_flag_result() is not None
+
+        engine.reset()
+
+        assert engine.get_red_flag_result() is None
+        assert engine.get_outcome() is None
+        assert engine.get_answer_history() == []
+        assert engine.is_finished() is False
+
+    def test_new_assessment_after_reset_can_detect_red_flag_again(self):
+        engine = ClinicalEngine("headache")
+
+        engine.submit_answer("yes")
+        first_result = engine.get_red_flag_result()
+
+        engine.reset()
+        assert engine.get_red_flag_result() is None
+
+        engine.submit_answer("yes")
+        second_result = engine.get_red_flag_result()
+
+        assert first_result is not None
+        assert second_result is not None
+        assert second_result.red_flag_type == (
+            "headache_emergency_thunderclap"
+        )
+
+    def test_invalid_answer_does_not_create_red_flag(self):
+        engine = ClinicalEngine("headache")
+
+        with pytest.raises(ValueError):
+            engine.submit_answer("maybe")
+
+        assert engine.get_red_flag_result() is None
+        assert engine.get_answer_history() == []
+        assert engine.is_finished() is False
+
+    def test_intermediate_normal_answer_has_no_red_flag(self):
+        engine = ClinicalEngine("headache")
+
+        result = engine.submit_answer("no")
+
+        assert result is None
+        assert engine.get_red_flag_result() is None
+        assert engine.is_finished() is False
+
+
+# ============================================================
+# RED FLAG OUTCOME COVERAGE
+# ============================================================
+
+class TestRedFlagOutcomeCoverage:
+
+    @pytest.mark.parametrize(
+        "tree_name",
+        [
+            "fever",
+            "abdominal_pain",
+            "headache",
+            "cough",
+            "difficulty_breathing",
+            "chest_pain",
+            "vomiting",
+            "nausea",
+            "diarrhea",
+            "back_pain",
+        ],
+    )
+    def test_each_tree_contains_at_least_one_red_flag_outcome(
+        self,
+        tree_name,
+    ):
+        tree = QUESTION_TREES[tree_name]
+
+        red_flag_outcomes = [
+            outcome
+            for outcome in tree["outcomes"].values()
+            if outcome["urgency"] in {"soon", "emergency"}
+        ]
+
+        assert red_flag_outcomes
+
+    @pytest.mark.parametrize(
+        "tree_name",
+        [
+            "fever",
+            "abdominal_pain",
+            "headache",
+            "cough",
+            "difficulty_breathing",
+            "chest_pain",
+            "vomiting",
+            "nausea",
+            "diarrhea",
+            "back_pain",
+        ],
+    )
+    def test_tree_red_flag_transition_is_structured(
+        self,
+        tree_name,
+    ):
+        tree = QUESTION_TREES[tree_name]
+
+        for question in tree["questions"].values():
+            if question["type"] == "yes_no":
+                transitions = [
+                    question["yes"],
+                    question["no"],
+                ]
+            else:
+                transitions = [question["next"]]
+
+            for transition in transitions:
+                if transition in tree["outcomes"]:
+                    urgency = tree["outcomes"][transition]["urgency"]
+
+                    if urgency in {"soon", "emergency"}:
+                        result = detect_red_flag(
+                            tree,
+                            question,
+                            "yes" if question["type"] == "yes_no"
+                            and question["yes"] == transition
+                            else "no",
+                            transition,
+                        )
+
+                        assert result.is_red_flag is True
