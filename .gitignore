@@ -5,3 +5,6 @@ dist/
 !.env.example
 __pycache__/
 *.pyc
+*.py[cod]
+tempCodeRunnerFile.py
+.vscode/
