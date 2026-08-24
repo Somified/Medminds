@@ -95,7 +95,35 @@ ayush: {
   status: "draft"
 };
 
-const API_BASE = "http://localhost:4000";
+const API_BASE = "http://localhost:8000";
+
+async function sendChatToGemini({
+  patientLanguage = "English",
+  careSystem = "allopathic",
+  patientAgeBand = "30-40",
+  conversationHistory = []
+}) {
+  const response = await fetch(`${API_BASE}/api/chat`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      patient_language: patientLanguage,
+      care_system: careSystem,
+      patient_age_band: patientAgeBand,
+      conversation_history: conversationHistory
+    })
+  });
+
+  const result = await response.json();
+
+  if (!response.ok || result.error) {
+    throw new Error(result.error || "Failed to contact the AI assistant.");
+  }
+
+  return result;
+}
 
 const sections = [
   ["complaint", "Chief Complaint"],
@@ -1358,15 +1386,170 @@ function ComplaintSection({ data, toggle, update, setSection }) {
 function HPISection({ data, update }) {
   const chestPain = data.chiefComplaint.includes("Chest pain");
 
+  const [conversation, setConversation] = useState([]);
+  const [aiResponse, setAiResponse] = useState(null);
+  const [userMessage, setUserMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [chatStarted, setChatStarted] = useState(false);
+
+  const sendMessage = async (message) => {
+    const text = message.trim();
+
+    if (!text || loading) return;
+
+    const newHistory = [
+      ...conversation,
+      {
+        role: "user",
+        content: text
+      }
+    ];
+
+    setConversation(newHistory);
+    setUserMessage("");
+    setLoading(true);
+
+    try {
+      const result = await sendChatToGemini({
+        patientLanguage: data.patient.language,
+        careSystem: data.mode === "AYUSH" ? "ayush" : "allopathic",
+        patientAgeBand: data.patient.age
+          ? `${data.patient.age}`
+          : "30-40",
+        conversationHistory: newHistory
+      });
+
+      setAiResponse(result);
+
+      setConversation([
+        ...newHistory,
+        {
+          role: "assistant",
+          content: result.speak || ""
+        }
+      ]);
+    } catch (error) {
+      setAiResponse({
+        speak: `Sorry, I could not connect to the AI assistant. ${error.message}`,
+        options: null,
+        redflag: null
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <section>
       <h1>History of Present Illness</h1>
-      <p>Tell us how the current problem started and how it has changed.</p>
 
+      <p>
+        Tell us how the current problem started and how it has changed.
+      </p>
+
+      {/* Gemini conversational intake */}
+      <div className="card">
+        <h2>AI Health History Assistant</h2>
+
+        <p>
+          You can describe your symptoms naturally. The AI assistant will ask
+          follow-up questions to understand your problem better.
+        </p>
+
+        {!chatStarted && (
+          <button
+            type="button"
+            className="primary"
+            onClick={() => {
+              setChatStarted(true);
+              sendMessage(
+                "Please begin the clinical history interview. Ask me about my main problem."
+              );
+            }}
+          >
+            Start AI Conversation
+          </button>
+        )}
+
+        {chatStarted && (
+          <>
+            {conversation.length > 0 && (
+              <div className="card">
+                {conversation.map((turn, index) => (
+                  <div key={index} style={{ marginBottom: "12px" }}>
+                    <strong>
+                      {turn.role === "user" ? "You" : "AI Assistant"}:
+                    </strong>{" "}
+                    {turn.content}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {aiResponse?.speak && (
+              <div className="card">
+                <h3>AI Assistant</h3>
+                <p>{aiResponse.speak}</p>
+              </div>
+            )}
+
+            {aiResponse?.options &&
+              Array.isArray(aiResponse.options) && (
+                <div className="option-grid">
+                  {aiResponse.options.map((option, index) => (
+                    <button
+                      type="button"
+                      key={index}
+                      onClick={() => sendMessage(option)}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+            <div style={{ marginTop: "16px" }}>
+              <textarea
+                value={userMessage}
+                onChange={e => setUserMessage(e.target.value)}
+                placeholder="Describe how you are feeling..."
+                rows={3}
+              />
+
+              <button
+                type="button"
+                className="primary"
+                onClick={() => sendMessage(userMessage)}
+                disabled={loading}
+              >
+                {loading ? "AI is thinking..." : "Send"}
+              </button>
+            </div>
+
+            {aiResponse?.redflag?.triggered && (
+              <div className="card">
+                <h3>⚠️ Please seek medical attention</h3>
+                <p>
+                  {aiResponse.redflag.reason ||
+                    "The AI detected a possible warning sign."}
+                </p>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Existing structured questionnaire */}
       <QuestionCard title="When did this problem start?">
         <ChoiceButtons
           value={data.hpi.onset}
-          options={["Today", "A few days ago", "1–4 weeks ago", "More than a month ago", "Not sure"]}
+          options={[
+            "Today",
+            "A few days ago",
+            "1–4 weeks ago",
+            "More than a month ago",
+            "Not sure"
+          ]}
           onChange={value => update("hpi.onset", value)}
         />
       </QuestionCard>
@@ -1382,7 +1565,12 @@ function HPISection({ data, update }) {
       <QuestionCard title="Has it been getting better, worse, or staying the same?">
         <ChoiceButtons
           value={data.hpi.duration}
-          options={["Better", "Worse", "About the same", "Comes and goes"]}
+          options={[
+            "Better",
+            "Worse",
+            "About the same",
+            "Comes and goes"
+          ]}
           onChange={value => update("hpi.duration", value)}
         />
       </QuestionCard>
@@ -1390,11 +1578,15 @@ function HPISection({ data, update }) {
       {chestPain && (
         <div className="card">
           <h3>Chest pain details</h3>
+
           <label>
             What does the pain feel like?
+
             <select
               value={data.hpi.character}
-              onChange={e => update("hpi.character", e.target.value)}
+              onChange={e =>
+                update("hpi.character", e.target.value)
+              }
             >
               <option value="">Select</option>
               <option>Pressure</option>
@@ -1404,11 +1596,15 @@ function HPISection({ data, update }) {
               <option>Other</option>
             </select>
           </label>
+
           <label>
             Does it move anywhere?
+
             <input
               value={data.hpi.radiation}
-              onChange={e => update("hpi.radiation", e.target.value)}
+              onChange={e =>
+                update("hpi.radiation", e.target.value)
+              }
               placeholder="Optional"
             />
           </label>
@@ -1417,9 +1613,12 @@ function HPISection({ data, update }) {
 
       <label>
         Is there anything that makes it better or worse?
+
         <textarea
           value={data.hpi.narrative}
-          onChange={e => update("hpi.narrative", e.target.value)}
+          onChange={e =>
+            update("hpi.narrative", e.target.value)
+          }
           placeholder="Optional..."
         />
       </label>
