@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 
 const EMPTY_CASE = {
   patient: {
@@ -19,6 +19,21 @@ const EMPTY_CASE = {
   },
   consent: false,
   documents: [],
+  aiInterview: {
+    messages: [],
+    transcript: "",
+    completed: false,
+    redflag: null,
+    summary: null,
+    clinicalOutcome: null,
+    currentQuestion: null,
+    questionHistory: [],
+    triageLocked: false
+  },
+  // Single source of truth for information already captured anywhere in the case.
+  // The AI, clinical engine, manual frontend and AYUSH questionnaire all read this.
+  answeredQuestions: {},
+  answeredFacts: {},
   mode: "Allopathic",
   chiefComplaint: [],
   otherComplaint: "",
@@ -33,7 +48,8 @@ const EMPTY_CASE = {
     narrative: "",
     location: "",
     severity: "",
-    course: ""
+    course: "",
+    temperature: ""
   },
   pastMedicalHistory: {
     conditions: [], hospitalization: "", hospitalizationDetails: "",
@@ -97,8 +113,175 @@ ayush: {
 
 const API_BASE = "http://localhost:4000";
 
+// Thin API adapter for the Python AI/Sarvam modules.
+// These Python functions are NOT HTTP endpoints by themselves; a small backend
+// route must expose these paths. The frontend only talks to the backend.
+const AI_API = {
+  turn: `${API_BASE}/api/ai/turn`,
+  speechToText: `${API_BASE}/api/speech-to-text`,
+  translate: `${API_BASE}/api/translate`,
+  textToSpeech: `${API_BASE}/api/text-to-speech`
+};
+
+// The Python ClinicalEngine is the clinical source of truth.
+// The AI is only allowed to phrase/normalize the question; it does not choose
+// the next clinical question or decide whether a response is a red flag.
+const CLINICAL_API = {
+  start: `${API_BASE}/api/clinical/start`,
+  answer: `${API_BASE}/api/clinical/answer`
+};
+
+// Canonical facts shared by every frontend section and the AI.
+// If a fact is already present here, another part of the UI must not ask for it again.
+const FACT_REGISTRY = [
+  ["patient.name", "demographics.name", "Patient name"],
+  ["patient.age", "demographics.age", "Age"],
+  ["patient.gender", "demographics.gender", "Gender"],
+  ["patient.language", "demographics.language", "Preferred language"],
+  ["patient.abhaId", "demographics.abha_id", "ABHA ID"],
+
+  ["chiefComplaint", "presenting.complaints", "Chief complaint"],
+  ["hpi.onset", "symptom.onset", "Symptom onset"],
+  ["hpi.duration", "symptom.course", "Symptom course"],
+  ["hpi.location", "symptom.location", "Symptom location"],
+  ["hpi.severity", "symptom.severity", "Symptom severity"],
+  ["hpi.character", "symptom.character", "Symptom character"],
+  ["hpi.radiation", "symptom.radiation", "Symptom radiation"],
+  ["hpi.narrative", "symptom.associated_details", "Associated symptom details"],
+  ["hpi.temperature", "fever.temperature", "Measured temperature"],
+
+  ["pastMedicalHistory.conditions", "past_medical.conditions", "Past medical conditions"],
+  ["pastMedicalHistory.hospitalization", "past_medical.hospitalization", "Past hospitalization"],
+  ["pastMedicalHistory.hospitalizationDetails", "past_medical.hospitalization_details", "Hospitalization details"],
+  ["pastMedicalHistory.currentTreatment", "past_medical.current_treatment", "Current treatment"],
+  ["pastMedicalHistory.currentTreatmentDetails", "past_medical.current_treatment_details", "Current treatment details"],
+
+  ["pastSurgicalHistory.hadSurgery", "past_surgical.had_surgery", "Previous surgery"],
+  ["pastSurgicalHistory.surgeryDetails", "past_surgical.surgery_details", "Surgery details"],
+  ["pastSurgicalHistory.surgeryWhen", "past_surgical.surgery_when", "Surgery timing"],
+
+  ["drugs.taking", "medications.current", "Current medicines"],
+  ["drugs.medicines", "medications.names", "Medicine names"],
+  ["drugs.regularity", "medications.regularity", "Medicine regularity"],
+  ["drugs.supplements", "medications.supplements", "Supplements or traditional medicines"],
+  ["drugs.supplementDetails", "medications.supplement_details", "Supplement details"],
+
+  ["allergies.hasAllergy", "allergies.known", "Known allergies"],
+  ["allergies.allergyTypes", "allergies.types", "Allergy types"],
+  ["allergies.reaction", "allergies.reaction", "Allergy reaction"],
+
+  ["familyHistory.importantCondition", "family_history.present", "Important family history"],
+  ["familyHistory.conditions", "family_history.conditions", "Family conditions"],
+  ["familyHistory.relation", "family_history.relation", "Affected relative"],
+
+  ["personalHistory.diet", "personal.diet", "Usual diet"],
+  ["personalHistory.sleep", "personal.sleep", "Usual sleep"],
+  ["personalHistory.activity", "personal.activity", "Usual activity"],
+  ["personalHistory.lifestyle", "personal.lifestyle", "Lifestyle factors"]
+];
+
+const getPathValue = (object, path) =>
+  path.split(".").reduce((current, key) => current?.[key], object);
+
+const hasMeaningfulValue = value =>
+  value !== undefined &&
+  value !== null &&
+  value !== "" &&
+  !(Array.isArray(value) && value.length === 0);
+
+function collectAnsweredFacts(caseData) {
+  const facts = {};
+
+  FACT_REGISTRY.forEach(([path, factKey, label]) => {
+    const value = getPathValue(caseData, path);
+    if (hasMeaningfulValue(value)) {
+      facts[factKey] = {
+        value,
+        label,
+        source: "frontend"
+      };
+    }
+  });
+
+  Object.entries(caseData.answeredFacts || {}).forEach(([factKey, entry]) => {
+    if (entry && hasMeaningfulValue(entry.value)) {
+      facts[factKey] = entry;
+    }
+  });
+
+  // Clinical question IDs are also included so the AI can never ask a
+  // question that has already been answered, even if semantic mapping changes.
+  Object.entries(caseData.answeredQuestions || {}).forEach(([questionId, entry]) => {
+    facts[`question:${questionId}`] = {
+      value: entry.answer,
+      label: entry.question || questionId,
+      source: entry.source || "conversation",
+      question_id: questionId
+    };
+  });
+
+  return facts;
+}
+
+function normalizeClinicalRedFlag(redFlag) {
+  if (!redFlag) return null;
+  if (typeof redFlag === "string") {
+    return {
+      is_red_flag: true,
+      severity: "EMERGENCY",
+      message: redFlag,
+      recommended_action: "Alert triage/clinical staff immediately."
+    };
+  }
+  return {
+    is_red_flag: Boolean(redFlag.is_red_flag ?? redFlag.isRedFlag ?? true),
+    severity: redFlag.severity || redFlag.type || "URGENT",
+    message: redFlag.message || redFlag.reason || "A potentially serious response was detected.",
+    recommended_action:
+      redFlag.recommended_action ||
+      redFlag.recommendedAction ||
+      "Alert triage/clinical staff immediately."
+  };
+}
+
+function canonicalComplaint(value) {
+  const text = String(value || "").trim().toLowerCase();
+  const aliases = {
+    fever: "fever",
+    temperature: "fever",
+    "high temperature": "fever",
+    "abdominal pain": "abdominal_pain",
+    abdominal_pain: "abdominal_pain",
+    "stomach pain": "abdominal_pain",
+    "belly pain": "abdominal_pain",
+    headache: "headache",
+    "head pain": "headache",
+    cough: "cough",
+    breathlessness: "difficulty_breathing",
+    "difficulty breathing": "difficulty_breathing",
+    "breathing difficulty": "difficulty_breathing",
+    difficulty_breathing: "difficulty_breathing",
+    "shortness of breath": "difficulty_breathing",
+    "chest pain": "chest_pain",
+    chest_pain: "chest_pain",
+    vomiting: "vomiting",
+    vomit: "vomiting",
+    "throwing up": "vomiting",
+    nausea: "nausea",
+    "feeling nauseous": "nausea",
+    diarrhea: "diarrhea",
+    diarrhoea: "diarrhea",
+    "loose motions": "diarrhea",
+    "loose stools": "diarrhea",
+    "back pain": "back_pain",
+    back_pain: "back_pain"
+  };
+  return aliases[text] || null;
+}
+
 const sections = [
   ["complaint", "Chief Complaint"],
+  ["aiInterview", "AI Case-Taking"],
   ["hpi", "History of Present Illness"],
   ["pastMedical", "Past Medical History"],
   ["pastSurgical", "Past Surgical History"],
@@ -132,6 +315,7 @@ function normalizeCase(saved) {
     ...base,
     ...saved,
     patient: { ...base.patient, ...(saved.patient || {}) },
+    aiInterview: { ...base.aiInterview, ...(saved.aiInterview || {}) },
     hpi: { ...base.hpi, ...(saved.hpi || {}) },
     ros: { ...base.ros, ...(saved.ros || {}) },
     ayush: {
@@ -302,7 +486,8 @@ function App() {
     if (!saved) return cloneEmptyCase();
 
     try {
-      return normalizeCase(JSON.parse(saved));
+      const restored = normalizeCase(JSON.parse(saved));
+      return restored;
     } catch {
       localStorage.removeItem("medikiosk-case");
       return cloneEmptyCase();
@@ -317,22 +502,30 @@ function App() {
     localStorage.setItem("medikiosk-case", JSON.stringify(caseData));
   }, [caseData]);
 
+  // Initial safety signal: this is deliberately checked before the AI starts.
+  // The clinical engine remains the authoritative red-flag detector during the interview.
   const hasChestPain = caseData.chiefComplaint.includes("Chest pain");
   const hasBreathlessness = caseData.chiefComplaint.includes("Breathlessness");
-  const redFlag = useMemo(() => {
-    return hasChestPain && hasBreathlessness;
-  }, [hasChestPain, hasBreathlessness]);
+  const initialRedFlag = hasChestPain && hasBreathlessness;
+  const redFlag = caseData.aiInterview?.redflag || (initialRedFlag ? {
+    is_red_flag: true,
+    severity: "EMERGENCY",
+    message: "Chest pain together with breathlessness has been selected.",
+    recommended_action: "Alert triage/clinical staff immediately."
+  } : null);
 
   useEffect(() => {
-    if (redFlag) {
+    if (initialRedFlag || caseData.aiInterview?.redflag?.is_red_flag) {
       setAlert({
-        message: "Potential emergency symptoms detected. Please alert triage staff immediately.",
+        message:
+          caseData.aiInterview?.redflag?.message ||
+          "Potential emergency symptoms detected. Please alert triage staff immediately.",
         severity: "critical"
       });
     }
-  }, [redFlag]);
+  }, [initialRedFlag, caseData.aiInterview?.redflag]);
 
-  const update = (path, value) => {
+  const update = (path, value, meta = {}) => {
     setCaseData(prev => {
       const next = structuredClone(prev);
       const keys = path.split(".");
@@ -346,6 +539,30 @@ function App() {
       });
 
       obj[keys[keys.length - 1]] = value;
+
+      if (meta.questionId) {
+        next.answeredQuestions = next.answeredQuestions || {};
+        next.answeredQuestions[meta.questionId] = {
+          question_id: meta.questionId,
+          question: meta.question || meta.questionId,
+          answer: value,
+          source: meta.source || "frontend",
+          fact_key: meta.factKey || meta.questionId,
+          recorded_at: new Date().toISOString()
+        };
+      }
+
+      if (meta.factKey && hasMeaningfulValue(value)) {
+        next.answeredFacts = next.answeredFacts || {};
+        next.answeredFacts[meta.factKey] = {
+          value,
+          label: meta.label || meta.factKey,
+          source: meta.source || "frontend",
+          question_id: meta.questionId || null,
+          recorded_at: new Date().toISOString()
+        };
+      }
+
       return next;
     });
     setSaved(false);
@@ -626,7 +843,7 @@ function App() {
       return;
     }
     setScreen("case");
-    setSection("documents");
+    setSection("complaint");
   };
 
   const next = () => {
@@ -817,6 +1034,9 @@ function App() {
               </label>
             </div>
 
+            {section === "aiInterview" && (
+              <AIInterviewSection data={caseData} update={update} setSection={setSection} />
+            )}
             {section === "complaint" && (
               <ComplaintSection data={caseData} toggle={toggleComplaint} update={update} setSection={setSection} />
             )}
@@ -881,7 +1101,7 @@ function App() {
               <Review data={caseData} redFlag={redFlag} onSubmit={submitCase} />
             )}
 
-            {section !== "review" && section !== "documents" && (
+            {section !== "review" && section !== "documents" && section !== "aiInterview" && (
               <div className="navigation">
                 <button className="ghost" onClick={previous}>{t(caseData.patient.language, "previous")}</button>
                 <button className="primary" onClick={next}>{t(caseData.patient.language, "saveContinue")}</button>
@@ -1311,118 +1531,1093 @@ function Identification({ data, update, startCase }) {
   );
 }
 
+
+function AIInterviewSection({ data, update, setSection }) {
+  const language = data.patient.language || "English";
+  const languageCode = language === "Hindi" ? "hi-IN" : "en-IN";
+  const age = Number(data.patient.age);
+  const ageBand = Number.isFinite(age)
+    ? age < 18 ? "under-18"
+      : age < 30 ? "18-29"
+      : age < 40 ? "30-40"
+      : age < 60 ? "40-59"
+      : "60+"
+    : "unknown";
+
+  const [messages, setMessages] = useState(data.aiInterview?.messages || []);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [online, setOnline] = useState(null);
+  const [clinicalOnline, setClinicalOnline] = useState(null);
+  const [recording, setRecording] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [voiceHint, setVoiceHint] = useState("");
+  const [mediaRecorder, setMediaRecorder] = useState(null);
+  const [currentQuestion, setCurrentQuestion] = useState(data.aiInterview?.currentQuestion || null);
+  const [clinicalHistory, setClinicalHistory] = useState(data.aiInterview?.questionHistory || []);
+  const [triageLocked, setTriageLocked] = useState(
+    Boolean(data.aiInterview?.triageLocked || data.aiInterview?.redflag?.is_red_flag)
+  );
+
+  const complaint = canonicalComplaint(data.chiefComplaint[0]);
+
+  useEffect(() => {
+    update("aiInterview.messages", messages);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages]);
+
+  useEffect(() => {
+    update("aiInterview.currentQuestion", currentQuestion);
+    update("aiInterview.questionHistory", clinicalHistory);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentQuestion, clinicalHistory]);
+
+  const userCount = messages.filter(m => m.role === "user").length;
+  const lastAI = [...messages].reverse().find(m => m.role === "assistant");
+  const redflag = data.aiInterview?.redflag;
+
+  const speakWithBrowser = text => {
+    if (!text || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = languageCode;
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const speak = async text => {
+    if (!text) return;
+
+    try {
+      const response = await fetch(AI_API.textToSpeech, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, language_code: languageCode })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        const audio64 =
+          result.audio_base64 ||
+          result.audio ||
+          (Array.isArray(result.audios) ? result.audios[0] : null);
+
+        if (audio64) {
+          const audio = new Audio(`data:audio/wav;base64,${audio64}`);
+          await audio.play().catch(() => {});
+          return;
+        }
+
+        if (result.audio_url) {
+          const audio = new Audio(result.audio_url);
+          await audio.play().catch(() => {});
+          return;
+        }
+      }
+    } catch {}
+
+    speakWithBrowser(text);
+  };
+
+  const addMessage = (role, content, extra = {}) => {
+    if (!content) return;
+    setMessages(prev => [...prev, { role, content, ...extra }]);
+  };
+
+  const parseClinicalResponse = result => {
+    if (!result || typeof result !== "object") return null;
+
+    const state = result.state || result.session || {};
+    const question =
+      result.question ||
+      result.current_question ||
+      result.next_question ||
+      state.question ||
+      state.current_question ||
+      state.next_question ||
+      null;
+
+    return {
+      question,
+      redflag: normalizeClinicalRedFlag(
+        result.red_flag ||
+        result.redflag ||
+        state.red_flag ||
+        state.redflag
+      ),
+      outcome: result.outcome || state.outcome || null,
+      finished: Boolean(
+        result.finished ??
+        result.completed ??
+        state.finished ??
+        state.completed
+      ),
+      answerHistory:
+        result.answer_history ||
+        result.question_history ||
+        state.answer_history ||
+        state.question_history ||
+        null
+    };
+  };
+
+  const normalizeQuestion = question => {
+    if (!question) return null;
+    if (typeof question === "string") {
+      return {
+        id: null,
+        question,
+        type: "free_text",
+        options: []
+      };
+    }
+
+    return {
+      ...question,
+      id: question.id || question.question_id || null,
+      question:
+        question.question ||
+        question.text ||
+        question.prompt ||
+        question.label ||
+        "",
+      type: question.type || "free_text",
+      options: Array.isArray(question.options)
+        ? question.options
+        : question.options && typeof question.options === "object"
+          ? Object.entries(question.options).map(([value, label]) => ({ value, label }))
+          : []
+    };
+  };
+
+  /*
+   * IMPORTANT:
+   * The current Python Gemini backend accepts the original run_medikiosk_turn
+   * contract: patient_language, care_system, patient_age_band and
+   * conversation_history. It does NOT understand frontend-only "task" values
+   * such as "next_question", "normalize_answer" or "phrase_clinical_question".
+   *
+   * So Gemini is used here as the conversational layer only:
+   * - ClinicalEngine chooses the question.
+   * - Gemini acknowledges the patient's answer naturally.
+   * - The exact ClinicalEngine question is appended unchanged.
+   * - Gemini never gets permission to invent or skip a clinical question.
+   */
+  const askGeminiToAcknowledge = async (patientAnswer, nextQuestion) => {
+    try {
+      const prior = messages
+        .slice(-8)
+        .map(message => ({
+          role: message.role,
+          content: message.content
+        }));
+
+      const instruction = language === "Hindi"
+        ? `आप MediKiosk के patient-facing conversational assistant हैं।
+रोगी के जवाब को एक छोटे, स्वाभाविक वाक्य में acknowledge करें।
+कोई नया medical advice न दें और कोई सवाल न पूछें।
+अगला clinical सवाल पहले ही Clinical Engine ने तय कर दिया है; उसे आप तय नहीं करेंगे।
+रोगी का जवाब: "${patientAnswer}"
+अगला तय clinical सवाल: "${nextQuestion.question}"
+सिर्फ acknowledgement दें।`
+        : `You are MediKiosk's patient-facing conversational assistant.
+Acknowledge the patient's answer naturally in ONE short sentence.
+Do not give medical advice and do not ask any question.
+The Clinical Engine has already selected the next clinical question; you do not choose or change it.
+Patient answer: "${patientAnswer}"
+Next fixed clinical question: "${nextQuestion.question}"
+Return only the short acknowledgement.`;
+
+      const response = await fetch(AI_API.turn, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          patient_language: languageCode,
+          care_system: String(data.mode || "Allopathic").toLowerCase(),
+          patient_age_band: ageBand,
+          conversation_history: [
+            ...prior,
+            { role: "user", content: instruction }
+          ]
+        })
+      });
+
+      if (!response.ok) throw new Error("Gemini unavailable.");
+
+      const result = await response.json();
+      const acknowledgement = String(
+        result.speak ||
+        result.message ||
+        result.response ||
+        ""
+      ).trim();
+
+      // Reject an AI response that looks like it is trying to ask another
+      // question. The fixed engine question will be shown instead.
+      if (!acknowledgement || /[?؟]\s*$/.test(acknowledgement)) {
+        return "";
+      }
+
+      setOnline(true);
+      return acknowledgement;
+    } catch {
+      setOnline(false);
+      return "";
+    }
+  };
+
+  const showQuestion = async (question, acknowledgement = "") => {
+    const normalized = normalizeQuestion(question);
+    if (!normalized?.question) return;
+
+    const questionId = normalized.id;
+
+    // Never display a question whose canonical ID is already answered.
+    if (
+      questionId &&
+      (
+        data.answeredQuestions?.[questionId] ||
+        clinicalHistory.some(item => item.question_id === questionId)
+      )
+    ) {
+      return;
+    }
+
+    setCurrentQuestion(normalized);
+    update("aiInterview.currentQuestion", normalized);
+
+    const text = acknowledgement
+      ? `${acknowledgement} ${normalized.question}`
+      : normalized.question;
+
+    addMessage("assistant", text, {
+      question_id: questionId,
+      options: normalized.options || []
+    });
+
+    await speak(text);
+  };
+
+  const startClinicalSession = async () => {
+    if (!complaint) return;
+
+    setLoading(true);
+
+    try {
+      const response = await fetch(CLINICAL_API.start, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          complaint,
+          patient_id: data.patient.abhaId || data.patient.phone || null,
+          answered_facts: collectAnsweredFacts(data)
+        })
+      });
+
+      if (!response.ok) throw new Error("Clinical engine unavailable.");
+
+      const parsed = parseClinicalResponse(await response.json());
+      const question = normalizeQuestion(parsed?.question);
+
+      setClinicalOnline(true);
+
+      if (parsed?.redflag?.is_red_flag) {
+        setTriageLocked(true);
+        update("aiInterview.redflag", parsed.redflag);
+        update("aiInterview.triageLocked", true);
+        update("aiInterview.completed", true);
+
+        addMessage(
+          "assistant",
+          parsed.redflag.message || "This response requires immediate clinical attention.",
+          { redflag: parsed.redflag }
+        );
+        await speak(parsed.redflag.message || "This response requires immediate clinical attention.");
+        return;
+      }
+
+      if (!question?.question) {
+        if (parsed?.finished) {
+          update("aiInterview.completed", true);
+          const done = language === "Hindi"
+            ? "धन्यवाद। आवश्यक क्लिनिकल जानकारी दर्ज हो गई है।"
+            : "Thank you. The required clinical information has been captured.";
+          addMessage("assistant", done);
+          await speak(done);
+          setCurrentQuestion(null);
+          return;
+        }
+        throw new Error("Clinical engine returned no question.");
+      }
+
+      if (!messages.length) {
+        const intro = language === "Hindi"
+          ? "ठीक है। मैं आपकी बात ध्यान से समझते हुए केवल ज़रूरी सवाल पूछूँगा।"
+          : "Okay. I'll guide you through the relevant questions and keep track of what you've already told me.";
+        addMessage("assistant", intro);
+        await speak(intro);
+      }
+
+      await showQuestion(question);
+    } catch {
+      setClinicalOnline(false);
+
+      const message = language === "Hindi"
+        ? "क्लिनिकल प्रश्न सेवा अभी उपलब्ध नहीं है। कृपया बैकएंड शुरू करके फिर कोशिश करें।"
+        : "The clinical question service is not connected yet. Please start the clinical backend and try again.";
+
+      addMessage("assistant", message);
+      await speak(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const normalizeFreeformAnswer = rawAnswer => {
+    if (!currentQuestion) return String(rawAnswer || "").trim();
+
+    const raw = String(rawAnswer || "").trim();
+    if (!raw) return "";
+
+    if (currentQuestion.type === "number") {
+      const numberMatch = raw.match(/-?\d+(?:\.\d+)?/);
+      return numberMatch ? numberMatch[0] : raw;
+    }
+
+    const options = Array.isArray(currentQuestion.options)
+      ? currentQuestion.options
+      : [];
+
+    const lower = raw.toLowerCase();
+
+    if (currentQuestion.type === "yes_no") {
+      if (/^(yes|y|haan|han|हाँ|हां|हो|होय)\b/i.test(lower)) return "yes";
+      if (/^(no|n|nahin|nahi|नहीं|नही)\b/i.test(lower)) return "no";
+    }
+
+    const exact = options.find(option => {
+      const value = typeof option === "string" ? option : option.value;
+      const label = typeof option === "string" ? option : option.label;
+      return (
+        String(value || "").toLowerCase() === lower ||
+        String(label || "").toLowerCase() === lower
+      );
+    });
+
+    if (exact) {
+      return typeof exact === "string" ? exact : exact.value;
+    }
+
+    // Free-text answers should reach the clinical engine unchanged.
+    // No extra Gemini normalization request is made because the supplied
+    // Python Gemini backend does not expose that task.
+    return raw;
+  };
+
+  const handleClinicalAnswer = async answer => {
+    if (!currentQuestion || triageLocked) return;
+
+    const normalized = normalizeFreeformAnswer(answer);
+    if (!normalized) return;
+
+    const questionId = currentQuestion.id || `question_${clinicalHistory.length + 1}`;
+    const historyEntry = {
+      question_id: questionId,
+      question: currentQuestion.question,
+      answer: normalized,
+      source: "conversation",
+      recorded_at: new Date().toISOString()
+    };
+
+    if (
+      data.answeredQuestions?.[questionId] ||
+      clinicalHistory.some(item => item.question_id === questionId)
+    ) {
+      return;
+    }
+
+    setLoading(true);
+    addMessage("user", String(answer), {
+      question_id: questionId,
+      normalized_answer: normalized
+    });
+    setInput("");
+    update("aiInterview.transcript", String(answer), {
+      questionId,
+      question: currentQuestion.question,
+      source: "conversation"
+    });
+
+    let nextQuestion = null;
+    let outcome = null;
+
+    try {
+      const response = await fetch(CLINICAL_API.answer, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          complaint,
+          question_id: questionId,
+          answer: normalized,
+          patient_id: data.patient.abhaId || data.patient.phone || null,
+          answered_facts: collectAnsweredFacts(data),
+          answer_history: [...clinicalHistory, historyEntry]
+        })
+      });
+
+      if (!response.ok) throw new Error("Clinical answer endpoint unavailable.");
+
+      const parsed = parseClinicalResponse(await response.json());
+      setClinicalOnline(true);
+
+      const redFlagResult = parsed?.redflag;
+      nextQuestion = normalizeQuestion(parsed?.question);
+      outcome = parsed?.outcome || null;
+
+      setClinicalHistory(prev => [...prev, historyEntry]);
+
+      // Record the exact question as answered in the global no-repeat ledger.
+      update("answeredQuestions", {
+        ...(data.answeredQuestions || {}),
+        [questionId]: {
+          question_id: questionId,
+          question: currentQuestion.question,
+          answer: normalized,
+          source: "conversation",
+          fact_key: currentQuestion.fact_key || questionId,
+          recorded_at: new Date().toISOString()
+        }
+      });
+
+      if (redFlagResult?.is_red_flag) {
+        setTriageLocked(true);
+        update("aiInterview.redflag", redFlagResult);
+        update("aiInterview.triageLocked", true);
+        update("aiInterview.completed", true);
+
+        const emergencyMessage =
+          redFlagResult.message ||
+          (language === "Hindi"
+            ? "आपके जवाब में एक ऐसी जानकारी मिली है जिस पर तुरंत चिकित्सकीय ध्यान आवश्यक है।"
+            : "Your response contains information that needs immediate clinical attention.");
+
+        addMessage("assistant", emergencyMessage, { redflag: redFlagResult });
+        await speak(emergencyMessage);
+        return;
+      }
+
+      if (outcome) {
+        update("aiInterview.clinicalOutcome", outcome);
+      }
+
+      if (parsed?.answerHistory) {
+        setClinicalHistory(parsed.answerHistory);
+      }
+
+      if (parsed?.finished || !nextQuestion?.question) {
+        update("aiInterview.completed", true);
+
+        const done = outcome?.message ||
+          (language === "Hindi"
+            ? "धन्यवाद। आवश्यक क्लिनिकल जानकारी दर्ज हो गई है।"
+            : "Thank you. The required clinical information has been captured.");
+
+        addMessage("assistant", done);
+        await speak(done);
+        setCurrentQuestion(null);
+        return;
+      }
+
+      // Gemini communicates; ClinicalEngine still controls the exact question.
+      const acknowledgement = await askGeminiToAcknowledge(
+        String(answer),
+        nextQuestion
+      );
+
+      await showQuestion(nextQuestion, acknowledgement);
+    } catch {
+      setClinicalOnline(false);
+
+      // Do NOT let Gemini invent a clinical question when the engine is down.
+      // Preserve the last question and tell the user exactly what failed.
+      const message = language === "Hindi"
+        ? "आपका जवाब दर्ज नहीं हो पाया क्योंकि क्लिनिकल सेवा उपलब्ध नहीं है। कृपया फिर से कोशिश करें।"
+        : "I couldn't record that answer because the clinical service is unavailable. Please try again.";
+
+      addMessage("assistant", message);
+      await speak(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const send = async preset => {
+    const answer = String(preset ?? input).trim();
+    if (!answer || loading || triageLocked) return;
+    await handleClinicalAnswer(answer);
+  };
+
+  const startVoice = async () => {
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      setVoiceHint("Voice recording is not supported in this browser.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      const chunks = [];
+
+      recorder.ondataavailable = e => {
+        if (e.data.size) chunks.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(track => track.stop());
+        setRecording(false);
+        setVoiceBusy(true);
+        setVoiceHint("Converting your voice to text…");
+
+        try {
+          const blob = new Blob(chunks, {
+            type: recorder.mimeType || "audio/webm"
+          });
+          const file = new File([blob], "patient-voice.webm", {
+            type: blob.type
+          });
+
+          const form = new FormData();
+          form.append("file", file);
+          form.append("language_code", languageCode);
+
+          const response = await fetch(AI_API.speechToText, {
+            method: "POST",
+            body: form
+          });
+
+          if (!response.ok) throw new Error("STT unavailable.");
+
+          const result = await response.json();
+          const transcript = result.transcript || result.text || "";
+
+          if (!transcript) throw new Error("No transcript returned.");
+
+          setInput(transcript);
+          setVoiceHint("Voice captured. Press Continue to submit the answer.");
+        } catch {
+          setVoiceHint("Voice service is unavailable. You can type your answer.");
+        } finally {
+          setVoiceBusy(false);
+        }
+      };
+
+      recorder.start();
+      setMediaRecorder(recorder);
+      setRecording(true);
+      setVoiceHint("Listening… press Stop when finished.");
+    } catch {
+      setVoiceHint("Microphone permission was not granted.");
+    }
+  };
+
+  const stopVoice = () => {
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+      mediaRecorder.stop();
+      setMediaRecorder(null);
+    }
+  };
+
+  const browserVoice = () => {
+    const Recognition =
+      window.SpeechRecognition ||
+      window.webkitSpeechRecognition;
+
+    if (!Recognition) {
+      setVoiceHint("Browser voice is not supported here.");
+      return;
+    }
+
+    const recognition = new Recognition();
+    recognition.lang = languageCode;
+    recognition.interimResults = false;
+    recognition.continuous = false;
+
+    recognition.onstart = () => {
+      setRecording(true);
+      setVoiceHint("Listening…");
+    };
+
+    recognition.onresult = e => {
+      const transcript =
+        e.results?.[0]?.[0]?.transcript || "";
+
+      setInput(transcript);
+      setVoiceHint("Voice captured. Press Continue to submit the answer.");
+    };
+
+    recognition.onerror = () => {
+      setRecording(false);
+      setVoiceHint("Browser voice failed. Try typing instead.");
+    };
+
+    recognition.onend = () => setRecording(false);
+    recognition.start();
+  };
+
+  useEffect(() => {
+    if (!complaint) return;
+    if (data.aiInterview?.completed || triageLocked) return;
+    if (currentQuestion) return;
+
+    startClinicalSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [complaint]);
+
+  const options = Array.isArray(currentQuestion?.options)
+    ? currentQuestion.options
+    : [];
+
+  const renderedOptions =
+    currentQuestion?.type === "yes_no"
+      ? [
+          { value: "yes", label: "Yes" },
+          { value: "no", label: "No" }
+        ]
+      : options;
+
+  return (
+    <section>
+      <style>{`
+        .ai-shell { max-width:1080px; margin:0 auto; }
+        .ai-hero { display:flex; justify-content:space-between; gap:24px; margin-bottom:22px; }
+        .ai-kicker { display:inline-flex; padding:6px 10px; border-radius:999px; background:#e9f6f4; color:#256e69; font-size:11px; font-weight:800; letter-spacing:.08em; }
+        .ai-hero h1 { margin:10px 0 6px; font-size:34px; letter-spacing:-.03em; }
+        .ai-hero p { margin:0; max-width:680px; color:#66737b; font-size:15px; }
+        .ai-status { min-width:220px; padding:13px 15px; border:1px solid #e0e6e8; border-radius:14px; background:#fff; }
+        .ai-status strong { display:block; font-size:13px; }
+        .ai-status span { display:block; margin-top:4px; font-size:12px; color:#758087; }
+        .ai-layout { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:18px; align-items:start; }
+        .ai-main,.ai-side { background:#fff; border:1px solid #e0e6e8; border-radius:20px; box-shadow:0 12px 35px rgba(31,48,58,.06); }
+        .ai-main { overflow:hidden; }
+        .ai-topbar { display:flex; justify-content:space-between; padding:16px 20px; border-bottom:1px solid #edf0f1; background:#fbfcfc; font-size:12px; color:#68757c; }
+        .ai-question { padding:32px 30px 24px; background:linear-gradient(145deg,#f5fbfa,#fff); }
+        .ai-label { color:#708087; font-size:11px; font-weight:800; letter-spacing:.09em; }
+        .ai-question-text { margin-top:10px; font-size:27px; line-height:1.3; font-weight:700; color:#1f2b30; }
+        .ai-options { display:flex; flex-wrap:wrap; gap:9px; margin-top:18px; }
+        .ai-option { border:1px solid #b9d4d1 !important; background:#fff !important; color:#285e5a !important; border-radius:999px !important; padding:9px 14px !important; font-weight:650; }
+        .ai-input-area { padding:20px 22px 22px; }
+        .ai-input-row { display:flex; gap:9px; align-items:stretch; }
+        .ai-input { flex:1; min-width:0; border:1px solid #cbd5d9; border-radius:13px; padding:14px 15px; font-size:15px; outline:none; }
+        .ai-voice { border:1px solid #cbd8da !important; background:#fff !important; color:#3e6263 !important; border-radius:13px !important; padding:0 15px !important; font-weight:700; }
+        .ai-voice.recording { background:#fff1f1 !important; border-color:#e4aaaa !important; color:#a54848 !important; }
+        .ai-helper { margin-top:9px; font-size:12px; color:#758187; }
+        .ai-side { padding:18px; }
+        .ai-side-title { font-size:13px; font-weight:800; margin-bottom:14px; }
+        .ai-stat { display:flex; justify-content:space-between; padding:11px 0; border-bottom:1px solid #edf0f1; font-size:13px; }
+        .ai-stat:last-child { border-bottom:0; }
+        .ai-stat span:last-child { font-weight:750; }
+        .ai-redflag { margin-top:15px; padding:15px; border-radius:12px; border:1px solid #e7b2b2; background:#fff5f5; color:#813b3b; font-size:12px; line-height:1.5; }
+        .ai-lock { margin-top:12px; padding:12px; border-radius:12px; background:#fff5f5; border:1px solid #efc2c2; color:#813b3b; font-size:12px; }
+        .ai-transcript { margin-top:15px; border-top:1px solid #edf0f1; padding-top:14px; }
+        .ai-turn { margin-top:10px; padding:8px 10px; border-radius:9px; background:#f7f9f9; font-size:11px; line-height:1.45; }
+        .ai-nav { display:flex; justify-content:space-between; gap:10px; margin-top:18px; }
+        @media(max-width:820px){ .ai-layout{grid-template-columns:1fr}.ai-hero{flex-direction:column}.ai-status{min-width:0}.ai-question-text{font-size:23px}.ai-input-row{flex-wrap:wrap}.ai-input{flex-basis:100%} }
+      `}</style>
+
+      <div className="ai-shell">
+        <div className="ai-hero">
+          <div>
+            <span className="ai-kicker">✦ AI + CLINICAL ENGINE</span>
+            <h1>Let's understand what’s wrong.</h1>
+            <p>
+              The clinical engine controls the question path and red flags.
+              Gemini keeps the conversation natural without changing the clinical pathway.
+              Previously captured information is never intentionally asked again.
+            </p>
+          </div>
+
+          <div className="ai-status">
+            <strong>
+              Clinical engine: {clinicalOnline === true ? "connected" : clinicalOnline === false ? "unavailable" : "connecting…"}
+            </strong>
+            <span>
+              Gemini: {online === true ? "connected" : online === false ? "offline" : "ready"} · {language}
+            </span>
+            <span>Complaint: {data.chiefComplaint.join(", ") || "not selected"}</span>
+          </div>
+        </div>
+
+        {!complaint && (
+          <div className="card">
+            <strong>Select the main complaint first.</strong>
+            <p>The clinical question pathway cannot start until a complaint is selected.</p>
+            <button className="primary" onClick={() => setSection("complaint")}>Choose complaint →</button>
+          </div>
+        )}
+
+        {complaint && (
+          <div className="ai-layout">
+            <div className="ai-main">
+              <div className="ai-topbar">
+                <span><strong>Patient interview</strong></span>
+                <span>{clinicalHistory.length} clinical answer{clinicalHistory.length === 1 ? "" : "s"} captured</span>
+              </div>
+
+              <div className="ai-question">
+                <div className="ai-label">
+                  {triageLocked ? "CLINICAL PRIORITY" : "MEDIKIOSK AI"}
+                </div>
+
+                <div className="ai-question-text">
+                  {loading && !currentQuestion
+                    ? "I'm preparing the next relevant question…"
+                    : redflag?.message
+                      ? redflag.message
+                      : lastAI?.content || currentQuestion?.question || "Starting your clinical interview…"}
+                </div>
+
+                {!triageLocked && renderedOptions.length > 0 && (
+                  <div className="ai-options">
+                    {renderedOptions.map(option => {
+                      const value = typeof option === "string" ? option : option.value;
+                      const label = typeof option === "string" ? option : option.label;
+
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          className="ai-option"
+                          onClick={() => send(value)}
+                          disabled={loading}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {!triageLocked && (
+                <div className="ai-input-area">
+                  <div className="ai-label" style={{ marginBottom:7 }}>YOUR ANSWER</div>
+
+                  <div className="ai-input-row">
+                    <input
+                      className="ai-input"
+                      type={currentQuestion?.type === "number" ? "number" : "text"}
+                      value={input}
+                      onChange={e => setInput(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") send();
+                      }}
+                      placeholder={
+                        currentQuestion?.type === "number"
+                          ? "Enter a number…"
+                          : language === "Hindi"
+                            ? "अपना जवाब अपने शब्दों में बताएं…"
+                            : "Answer naturally in your own words…"
+                      }
+                      disabled={loading || voiceBusy}
+                    />
+
+                    <button
+                      type="button"
+                      className={`ai-voice ${recording ? "recording" : ""}`}
+                      onClick={recording ? stopVoice : startVoice}
+                      disabled={loading || voiceBusy}
+                    >
+                      {recording ? "⏹ Stop" : "🎙 Voice"}
+                    </button>
+
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={() => send()}
+                      disabled={loading || !input.trim()}
+                    >
+                      Continue →
+                    </button>
+                  </div>
+
+                  <div className="ai-helper">
+                    {voiceHint ||
+                      "Type, choose an option, or answer by voice. Gemini handles the conversation; the clinical engine controls the medical questions."}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <aside className="ai-side">
+              <div className="ai-side-title">Interview status</div>
+
+              <div className="ai-stat">
+                <span>Questions answered</span>
+                <span>{clinicalHistory.length}</span>
+              </div>
+              <div className="ai-stat">
+                <span>Known facts</span>
+                <span>{Object.keys(collectAnsweredFacts(data)).length}</span>
+              </div>
+              <div className="ai-stat">
+                <span>Mode</span>
+                <span>{data.mode}</span>
+              </div>
+              <div className="ai-stat">
+                <span>Status</span>
+                <span>{triageLocked ? "STOPPED" : data.aiInterview?.completed ? "Captured" : "In progress"}</span>
+              </div>
+
+              {redflag && (
+                <div className="ai-redflag" role="alert">
+                  <strong>🚨 Immediate clinical attention</strong>
+                  <div style={{marginTop:6}}>{redflag.message}</div>
+                  <div style={{marginTop:6}}>
+                    <strong>Action:</strong> {redflag.recommended_action}
+                  </div>
+                </div>
+              )}
+
+              {triageLocked && (
+                <div className="ai-lock">
+                  <strong>No further questions will be asked.</strong>
+                  <div style={{marginTop:4}}>
+                    The interview is locked so the priority response is not delayed.
+                  </div>
+                </div>
+              )}
+
+              {data.aiInterview?.clinicalOutcome && !redflag && (
+                <div className="card" style={{marginTop:14}}>
+                  <strong>Clinical pathway outcome</strong>
+                  <p>{data.aiInterview.clinicalOutcome.message}</p>
+                </div>
+              )}
+
+              <div className="ai-transcript">
+                <details>
+                  <summary>View interview transcript</summary>
+
+                  {messages.map((m, i) => (
+                    <div className="ai-turn" key={`${m.role}-${i}`}>
+                      <strong>{m.role === "user" ? "Patient" : "MediKiosk AI"}</strong>
+                      <div>{m.content}</div>
+                    </div>
+                  ))}
+                </details>
+              </div>
+            </aside>
+          </div>
+        )}
+
+        <div className="ai-nav">
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => {
+              setInput("");
+              setMessages([]);
+              setClinicalHistory([]);
+              setCurrentQuestion(null);
+              setTriageLocked(false);
+              setOnline(null);
+              setClinicalOnline(null);
+              update("aiInterview", {
+                ...data.aiInterview,
+                messages: [],
+                transcript: "",
+                completed: false,
+                redflag: null,
+                summary: null,
+                clinicalOutcome: null,
+                currentQuestion: null,
+                questionHistory: [],
+                triageLocked: false
+              });
+            }}
+          >
+            ↻ Restart interview
+          </button>
+
+          <button
+            type="button"
+            className="primary"
+            onClick={() => {
+              update("aiInterview.completed", true);
+              setSection("hpi");
+            }}
+            disabled={clinicalHistory.length === 0 || triageLocked}
+          >
+            Continue to detailed history →
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ComplaintSection({ data, toggle, update, setSection }) {
+  const selected = data.chiefComplaint || [];
+  const hasChestPain = selected.includes("Chest pain");
+  const hasBreathlessness = selected.includes("Breathlessness");
+  const immediateConcern = hasChestPain && hasBreathlessness;
+
   return (
     <section>
       <h1>{t(data.patient.language, "chiefComplaint")}</h1>
-      <p>Tell us the main reason for today's visit.</p>
+      <p>
+        Select the main complaint(s). This is the only place where the presenting
+        complaint is chosen. The AI/clinical engine will use this selection and will
+        not ask you to repeat it.
+      </p>
 
       <QuestionCard title="What is the main problem bringing you here today?">
         <ChoiceButtons
-          value={data.chiefComplaint}
+          value={selected}
           multi
           options={symptomOptions}
-          onChange={next => {
-            // Keep the existing chiefComplaint array because the red-flag rule
-            // depends on it.
-            update("chiefComplaint", next);
-          }}
+          onChange={next => update("chiefComplaint", next, {
+            factKey: "presenting.complaints",
+            label: "Chief complaint",
+            source: "frontend"
+          })}
         />
       </QuestionCard>
 
-      <label>
-        Where are you experiencing the problem?
-        <input
-          value={data.hpi.location}
-          onChange={e => update("hpi.location", e.target.value)}
-          placeholder="e.g. chest, stomach, head..."
-        />
-      </label>
-
-      <QuestionCard title="How much is it bothering you right now?">
-        <ChoiceButtons
-          value={data.hpi.severity}
-          options={["Mild", "Moderate", "Severe"]}
-          onChange={value => update("hpi.severity", value)}
-        />
-      </QuestionCard>
+      {immediateConcern && (
+        <div className="alert alert-critical" role="alert">
+          <strong>🚨 Priority alert</strong>
+          <span>
+            Chest pain and breathlessness have both been selected. Please alert triage staff immediately.
+            The AI interview will still stop automatically if the clinical engine detects any further red flag.
+          </span>
+        </div>
+      )}
 
       <div className="card">
         <strong>Selected complaints:</strong>{" "}
-        {data.chiefComplaint.length ? data.chiefComplaint.join(", ") : "None selected"}
+        {selected.length ? selected.join(", ") : "None selected"}
+      </div>
+
+      <div className="navigation">
+        <span />
+        <button
+          className="primary"
+          disabled={!selected.length}
+          onClick={() => setSection("aiInterview")}
+        >
+          Start controlled AI interview →
+        </button>
       </div>
     </section>
   );
 }
 
 function HPISection({ data, update }) {
-  const chestPain = data.chiefComplaint.includes("Chest pain");
+  const clinicalAnswers = data.aiInterview?.questionHistory || [];
+  const redflag = data.aiInterview?.redflag;
 
   return (
     <section>
       <h1>History of Present Illness</h1>
-      <p>Tell us how the current problem started and how it has changed.</p>
+      <p>
+        This page is a review/edit layer. It does not re-ask the clinical questions
+        already covered by the AI + ClinicalEngine.
+      </p>
 
-      <QuestionCard title="When did this problem start?">
-        <ChoiceButtons
-          value={data.hpi.onset}
-          options={["Today", "A few days ago", "1–4 weeks ago", "More than a month ago", "Not sure"]}
-          onChange={value => update("hpi.onset", value)}
-        />
-      </QuestionCard>
-
-      <QuestionCard title="Did it start suddenly or gradually?">
-        <ChoiceButtons
-          value={data.hpi.course}
-          options={["Suddenly", "Gradually", "Not sure"]}
-          onChange={value => update("hpi.course", value)}
-        />
-      </QuestionCard>
-
-      <QuestionCard title="Has it been getting better, worse, or staying the same?">
-        <ChoiceButtons
-          value={data.hpi.duration}
-          options={["Better", "Worse", "About the same", "Comes and goes"]}
-          onChange={value => update("hpi.duration", value)}
-        />
-      </QuestionCard>
-
-      {chestPain && (
-        <div className="card">
-          <h3>Chest pain details</h3>
-          <label>
-            What does the pain feel like?
-            <select
-              value={data.hpi.character}
-              onChange={e => update("hpi.character", e.target.value)}
-            >
-              <option value="">Select</option>
-              <option>Pressure</option>
-              <option>Burning</option>
-              <option>Sharp</option>
-              <option>Dull</option>
-              <option>Other</option>
-            </select>
-          </label>
-          <label>
-            Does it move anywhere?
-            <input
-              value={data.hpi.radiation}
-              onChange={e => update("hpi.radiation", e.target.value)}
-              placeholder="Optional"
-            />
-          </label>
+      {redflag && (
+        <div className="alert alert-critical" role="alert">
+          <strong>Priority response captured</strong>
+          <span>{redflag.message}</span>
         </div>
       )}
 
-      <label>
-        Is there anything that makes it better or worse?
-        <textarea
-          value={data.hpi.narrative}
-          onChange={e => update("hpi.narrative", e.target.value)}
-          placeholder="Optional..."
-        />
-      </label>
+      <div className="card">
+        <h2>Clinical-engine answers</h2>
+        {clinicalAnswers.length === 0 ? (
+          <p>No complaint-specific answers have been captured yet.</p>
+        ) : (
+          clinicalAnswers.map((item, index) => (
+            <div className="summary-row" key={`${item.question_id}-${index}`}>
+              <strong>{item.question}</strong>
+              <span>{String(item.answer)}</span>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="card">
+        <h2>Additional HPI details</h2>
+        <p className="progress-note">
+          These are editable fields only. They are not repeated as interview questions.
+        </p>
+
+        <div className="grid">
+          <label>
+            Location
+            <input
+              value={data.hpi.location}
+              onChange={e => update("hpi.location", e.target.value)}
+              placeholder="e.g. chest, abdomen, head"
+            />
+          </label>
+
+          <label>
+            Severity
+            <select
+              value={data.hpi.severity}
+              onChange={e => update("hpi.severity", e.target.value, {
+                factKey: "symptom.severity",
+                label: "Symptom severity"
+              })}
+            >
+              <option value="">Not recorded</option>
+              <option>Mild</option>
+              <option>Moderate</option>
+              <option>Severe</option>
+            </select>
+          </label>
+
+          <label>
+            Character
+            <input
+              value={data.hpi.character}
+              onChange={e => update("hpi.character", e.target.value)}
+              placeholder="e.g. pressure, sharp, burning"
+            />
+          </label>
+
+          <label>
+            Radiation
+            <input
+              value={data.hpi.radiation}
+              onChange={e => update("hpi.radiation", e.target.value)}
+              placeholder="If applicable"
+            />
+          </label>
+
+          <label>
+            Measured temperature (°C)
+            <input
+              type="number"
+              value={data.hpi.temperature}
+              onChange={e => update("hpi.temperature", e.target.value, {
+                factKey: "fever.temperature",
+                label: "Measured temperature"
+              })}
+              placeholder="If available"
+            />
+          </label>
+        </div>
+
+        <label>
+          Additional associated details
+          <textarea
+            value={data.hpi.narrative}
+            onChange={e => update("hpi.narrative", e.target.value)}
+            placeholder="Anything important that was not already captured?"
+          />
+        </label>
+      </div>
     </section>
   );
 }
@@ -1754,47 +2949,91 @@ function PersonalHistorySection({ data, update }) {
 }
 
 function ROSSection({ data, update }) {
+  const complaintSet = new Set((data.chiefComplaint || []).map(x => x.toLowerCase()));
+
+  const symptomMap = {
+    general: ["Fever", "Fatigue", "Weight change", "Loss of appetite"],
+    respiratory: ["Cough", "Breathlessness", "Wheezing", "Chest discomfort"],
+    gastrointestinal: ["Nausea", "Vomiting", "Abdominal pain", "Change in bowel habits"],
+    neurological: ["Headache", "Dizziness", "Weakness", "Numbness"]
+  };
+
+  const aliases = {
+    "fever": ["fever"],
+    "cough": ["cough"],
+    "breathlessness": ["breathlessness"],
+    "chest discomfort": ["chest pain"],
+    "nausea": ["nausea"],
+    "vomiting": ["vomiting"],
+    "abdominal pain": ["abdominal pain"],
+    "headache": ["headache"],
+    "weakness": ["weakness"]
+  };
+
+  const alreadyCovered = symptom => {
+    const keys = aliases[symptom.toLowerCase()] || [symptom.toLowerCase()];
+    return keys.some(key => complaintSet.has(key));
+  };
+
   const toggle = (group, symptom) => {
     const current = data[group] || [];
     const next = current.includes(symptom)
       ? current.filter(x => x !== symptom)
       : [...current.filter(x => x !== "None"), symptom];
-    update(`ros.${group}`, next);
+    update(`ros.${group}`, next, {
+      factKey: `ros.${group}`,
+      label: `${group} review`
+    });
   };
 
-  const renderGroup = (group, title, symptoms) => (
-    <div className="card" key={group}>
-      <h3>{title}</h3>
-      <div className="option-grid">
-        {[...symptoms, "None"].map(symptom => (
-          <button
-            type="button"
-            key={symptom}
-            className={(data[group] || []).includes(symptom) ? "selected" : ""}
-            onClick={() => {
-              if (symptom === "None") {
-                update(`ros.${group}`, ["None"]);
-              } else {
-                toggle(group, symptom);
-              }
-            }}
-          >
-            {symptom}
-          </button>
-        ))}
+  const renderGroup = (group, title, symptoms) => {
+    const visibleSymptoms = symptoms.filter(symptom => !alreadyCovered(symptom));
+
+    return (
+      <div className="card" key={group}>
+        <h3>{title}</h3>
+
+        {visibleSymptoms.length === 0 ? (
+          <p className="progress-note">All symptoms in this group are already covered by the presenting complaint/clinical interview.</p>
+        ) : (
+          <div className="option-grid">
+            {[...visibleSymptoms, "None"].map(symptom => (
+              <button
+                type="button"
+                key={symptom}
+                className={(data[group] || []).includes(symptom) ? "selected" : ""}
+                onClick={() => {
+                  if (symptom === "None") {
+                    update(`ros.${group}`, ["None"], {
+                      factKey: `ros.${group}`,
+                      label: `${group} review`
+                    });
+                  } else {
+                    toggle(group, symptom);
+                  }
+                }}
+              >
+                {symptom}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <section>
       <h1>Review of Systems</h1>
-      <p>A quick symptom check across the main body systems.</p>
+      <p>
+        Only symptoms not already selected as the chief complaint are shown.
+        This prevents the ROS from re-asking the same presenting symptom.
+      </p>
 
-      {renderGroup("general", "General symptoms", ["Fever", "Fatigue", "Weight change", "Loss of appetite"])}
-      {renderGroup("respiratory", "Breathing / chest symptoms", ["Cough", "Breathlessness", "Wheezing", "Chest discomfort"])}
-      {renderGroup("gastrointestinal", "Stomach / bowel symptoms", ["Nausea", "Vomiting", "Abdominal pain", "Change in bowel habits"])}
-      {renderGroup("neurological", "Neurological symptoms", ["Headache", "Dizziness", "Weakness", "Numbness"])}
+      {renderGroup("general", "General symptoms", symptomMap.general)}
+      {renderGroup("respiratory", "Breathing / chest symptoms", symptomMap.respiratory)}
+      {renderGroup("gastrointestinal", "Stomach / bowel symptoms", symptomMap.gastrointestinal)}
+      {renderGroup("neurological", "Neurological symptoms", symptomMap.neurological)}
     </section>
   );
 }
@@ -2106,6 +3345,12 @@ function Review({ data, redFlag, onSubmit }) {
         ["ABHA ID", value(data.patient.abhaId)],
         ["Language", value(data.patient.language)],
         ["Mode", value(data.mode)]
+      ]} />
+
+      <Summary title="AI Case-Taking" rows={[
+        ["Interview", data.aiInterview?.messages?.length
+          ? data.aiInterview.messages.map(m => `${m.role === "user" ? "Patient" : "AI"}: ${m.content}`).join(" | ")
+          : "No AI interview recorded"]
       ]} />
 
       <Summary title="Chief Complaint" rows={[
