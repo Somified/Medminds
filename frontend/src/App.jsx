@@ -30,19 +30,67 @@ const EMPTY_CASE = {
     aggravating: "",
     relieving: "",
     associatedSymptoms: "",
-    narrative: ""
+    narrative: "",
+    location: "",
+    severity: "",
+    course: ""
   },
-  pastMedicalHistory: "",
-  pastSurgicalHistory: "",
-  drugs: "",
-  allergies: "",
-  familyHistory: "",
-  personalHistory: "",
-  ros: {},
-  ayush: {
-    prakriti: "", vikriti: "", sara: "", samhanana: "", pramana: "",
-    satmya: "", sattva: "", aharaShakti: "", vyayamaShakti: "", vaya: "",
-    aharaVihara: ""
+  pastMedicalHistory: {
+    conditions: [], hospitalization: "", hospitalizationDetails: "",
+    currentTreatment: "", currentTreatmentDetails: ""
+  },
+  pastSurgicalHistory: {
+    hadSurgery: "", surgeryDetails: "", surgeryWhen: ""
+  },
+  drugs: {
+    taking: "", medicines: "", regularity: "", supplements: "", supplementDetails: ""
+  },
+  allergies: {
+    hasAllergy: "", allergyTypes: [], reaction: ""
+  },
+  familyHistory: {
+    importantCondition: "", conditions: [], relation: ""
+  },
+  personalHistory: {
+    diet: "", sleep: "", activity: "", lifestyle: ""
+  },
+  ros: {
+    general: [], respiratory: [], gastrointestinal: [], neurological: []
+  },
+ayush: {
+    prakriti: {
+      bodyBuild: "", weightTendency: "", appetiteTendency: "",
+      digestionTendency: "", sleepPattern: "", temperaturePreference: ""
+    },
+    vikriti: {
+      changeFromNormal: "", currentAppetite: "", currentDigestion: "",
+      bowelHabit: "", sleepChange: "", energyChange: ""
+    },
+    sara: {
+      overallPhysicalHealth: "", recovery: "", generalVitality: ""
+    },
+    samhanana: {
+      bodyFrame: "", boneJointBuild: "", jointStability: ""
+    },
+    pramana: {
+      height: "", weight: "", waistCircumference: ""
+    },
+    satmya: {
+      foodTolerance: "", foodIntolerance: "", climateTolerance: ""
+    },
+    sattva: {
+      stressResponse: "", copingAbility: "", concentration: "", support: ""
+    },
+    aharaShakti: {
+      usualHunger: "", mealCapacity: "", mealTolerance: ""
+    },
+    vyayamaShakti: {
+      usualActivity: "", exerciseTolerance: "", breathlessnessFatigue: "",
+      recovery: "", usualExercise: ""
+    },
+    vaya: {
+      lifeStageContext: ""
+    }
   },
   status: "draft"
 };
@@ -74,6 +122,50 @@ const rosGroups = {
 
 function cloneEmptyCase() {
   return JSON.parse(JSON.stringify(EMPTY_CASE));
+}
+
+function normalizeCase(saved) {
+  const base = cloneEmptyCase();
+  if (!saved || typeof saved !== "object") return base;
+
+  const merged = {
+    ...base,
+    ...saved,
+    patient: { ...base.patient, ...(saved.patient || {}) },
+    hpi: { ...base.hpi, ...(saved.hpi || {}) },
+    ros: { ...base.ros, ...(saved.ros || {}) },
+    ayush: {
+      ...base.ayush,
+      ...(saved.ayush || {}),
+      prakriti: { ...base.ayush.prakriti, ...(saved.ayush?.prakriti || {}) },
+      vikriti: { ...base.ayush.vikriti, ...(saved.ayush?.vikriti || {}) },
+      sara: { ...base.ayush.sara, ...(saved.ayush?.sara || {}) },
+      samhanana: { ...base.ayush.samhanana, ...(saved.ayush?.samhanana || {}) },
+      pramana: { ...base.ayush.pramana, ...(saved.ayush?.pramana || {}) },
+      satmya: { ...base.ayush.satmya, ...(saved.ayush?.satmya || {}) },
+      sattva: { ...base.ayush.sattva, ...(saved.ayush?.sattva || {}) },
+      aharaShakti: { ...base.ayush.aharaShakti, ...(saved.ayush?.aharaShakti || {}) },
+      vyayamaShakti: { ...base.ayush.vyayamaShakti, ...(saved.ayush?.vyayamaShakti || {}) },
+      vaya: { ...base.ayush.vaya, ...(saved.ayush?.vaya || {}) }
+    }
+  };
+
+  const normalizeObject = (key) => {
+    const value = saved[key];
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return { ...base[key], ...value };
+    }
+    return { ...base[key] };
+  };
+
+  merged.pastMedicalHistory = normalizeObject("pastMedicalHistory");
+  merged.pastSurgicalHistory = normalizeObject("pastSurgicalHistory");
+  merged.drugs = normalizeObject("drugs");
+  merged.allergies = normalizeObject("allergies");
+  merged.familyHistory = normalizeObject("familyHistory");
+  merged.personalHistory = normalizeObject("personalHistory");
+
+  return merged;
 }
 
 const UI_TEXT = {
@@ -207,7 +299,14 @@ const PROGRESS_STEPS = [...sections.map(([id]) => id), "documents"];
 function App() {
   const [caseData, setCaseData] = useState(() => {
     const saved = localStorage.getItem("medikiosk-case");
-    return saved ? JSON.parse(saved) : cloneEmptyCase();
+    if (!saved) return cloneEmptyCase();
+
+    try {
+      return normalizeCase(JSON.parse(saved));
+    } catch {
+      localStorage.removeItem("medikiosk-case");
+      return cloneEmptyCase();
+    }
   });
   const [screen, setScreen] = useState("portal");
   const [section, setSection] = useState("complaint");
@@ -238,7 +337,14 @@ function App() {
       const next = structuredClone(prev);
       const keys = path.split(".");
       let obj = next;
-      keys.slice(0, -1).forEach(k => obj = obj[k]);
+
+      keys.slice(0, -1).forEach(key => {
+        if (!obj[key] || typeof obj[key] !== "object" || Array.isArray(obj[key])) {
+          obj[key] = {};
+        }
+        obj = obj[key];
+      });
+
       obj[keys[keys.length - 1]] = value;
       return next;
     });
@@ -727,34 +833,43 @@ function App() {
               <HPISection data={caseData} update={update} />
             )}
             {section === "pastMedical" && (
-              <TextSection title="Past Medical History" value={caseData.pastMedicalHistory}
-                onChange={v => update("pastMedicalHistory", v)}
-                placeholder="Previous illnesses, diagnoses, hospitalizations, chronic conditions..." />
+              <PastMedicalSection
+                data={caseData.pastMedicalHistory}
+                update={update}
+              />
             )}
             {section === "pastSurgical" && (
-              <TextSection title="Past Surgical History" value={caseData.pastSurgicalHistory}
-                onChange={v => update("pastSurgicalHistory", v)}
-                placeholder="Previous operations/procedures and approximate dates..." />
+              <PastSurgicalSection
+                data={caseData.pastSurgicalHistory}
+                update={update}
+                setSection={setSection}
+              />
             )}
             {section === "drugs" && (
-              <TextSection title="Drug History" value={caseData.drugs}
-                onChange={v => update("drugs", v)}
-                placeholder="Current or recent medicines, dosage if known..." />
+              <DrugHistorySection
+                data={caseData.drugs}
+                update={update}
+                setSection={setSection}
+              />
             )}
             {section === "allergies" && (
-              <TextSection title="Allergy History" value={caseData.allergies}
-                onChange={v => update("allergies", v)}
-                placeholder="Known drug, food or other allergies; reaction if known..." />
+              <AllergyHistorySection
+                data={caseData.allergies}
+                update={update}
+                setSection={setSection}
+              />
             )}
             {section === "family" && (
-              <TextSection title="Family History" value={caseData.familyHistory}
-                onChange={v => update("familyHistory", v)}
-                placeholder="Relevant illnesses or conditions in family..." />
+              <FamilyHistorySection
+                data={caseData.familyHistory}
+                update={update}
+              />
             )}
             {section === "personal" && (
-              <TextSection title="Personal History" value={caseData.personalHistory}
-                onChange={v => update("personalHistory", v)}
-                placeholder="Diet, sleep, bowel/bladder habits, substance use, occupation and other relevant information..." />
+              <PersonalHistorySection
+                data={caseData.personalHistory}
+                update={update}
+              />
             )}
             {section === "ros" && (
               <ROSSection data={caseData.ros} update={update} />
@@ -1209,40 +1324,41 @@ function ComplaintSection({ data, toggle, update, setSection }) {
   return (
     <section>
       <h1>{t(data.patient.language, "chiefComplaint")}</h1>
-      <p>Select the main reason for today's visit. Multiple complaints can be selected.</p>
+      <p>Tell us the main reason for today's visit.</p>
 
-      <div className="option-grid">
-        {symptomOptions.map(item => (
-          <button
-            key={item}
-            className={data.chiefComplaint.includes(item) ? "selected" : ""}
-            onClick={() => toggle(item)}
-          >
-            {item}
-          </button>
-        ))}
-      </div>
+      <QuestionCard title="What is the main problem bringing you here today?">
+        <ChoiceButtons
+          value={data.chiefComplaint}
+          multi
+          options={symptomOptions}
+          onChange={next => {
+            // Keep the existing chiefComplaint array because the red-flag rule
+            // depends on it.
+            update("chiefComplaint", next);
+          }}
+        />
+      </QuestionCard>
 
-      {data.chiefComplaint.includes("Other") && (
-        <label>
-          Other complaint
-          <input value={data.otherComplaint} onChange={e => update("otherComplaint", e.target.value)} />
-        </label>
-      )}
+      <label>
+        Where are you experiencing the problem?
+        <input
+          value={data.hpi.location}
+          onChange={e => update("hpi.location", e.target.value)}
+          placeholder="e.g. chest, stomach, head..."
+        />
+      </label>
 
-      {data.chiefComplaint.length > 0 && (
-        <div className="card">
-          <strong>Selected complaints:</strong> {data.chiefComplaint.join(", ")}
-        </div>
-      )}
+      <QuestionCard title="How much is it bothering you right now?">
+        <ChoiceButtons
+          value={data.hpi.severity}
+          options={["Mild", "Moderate", "Severe"]}
+          onChange={value => update("hpi.severity", value)}
+        />
+      </QuestionCard>
 
       <div className="card">
-        <h3>Adaptive questioning</h3>
-        <p>
-          The next questions can branch based on the selected complaint. Chest pain, for example,
-          enables onset, character, radiation and aggravating/relieving questions in the HPI section.
-        </p>
-        <button onClick={() => setSection("hpi")}>Continue to HPI →</button>
+        <strong>Selected complaints:</strong>{" "}
+        {data.chiefComplaint.length ? data.chiefComplaint.join(", ") : "None selected"}
       </div>
     </section>
   );
@@ -1250,82 +1366,398 @@ function ComplaintSection({ data, toggle, update, setSection }) {
 
 function HPISection({ data, update }) {
   const chestPain = data.chiefComplaint.includes("Chest pain");
+
   return (
     <section>
       <h1>History of Present Illness</h1>
-      <p>Capture the current illness in a structured form. Questions shown can depend on the chief complaint.</p>
+      <p>Tell us how the current problem started and how it has changed.</p>
 
-      <div className="grid">
-        <label>
-          Onset
-          <select value={data.hpi.onset} onChange={e => update("hpi.onset", e.target.value)}>
-            <option value="">Select</option>
-            <option>Sudden</option>
-            <option>Gradual</option>
-            <option>Not sure</option>
-          </select>
-        </label>
+      <QuestionCard title="When did this problem start?">
+        <ChoiceButtons
+          value={data.hpi.onset}
+          options={["Today", "A few days ago", "1–4 weeks ago", "More than a month ago", "Not sure"]}
+          onChange={value => update("hpi.onset", value)}
+        />
+      </QuestionCard>
 
-        <label>
-          Duration
-          <input value={data.hpi.duration} onChange={e => update("hpi.duration", e.target.value)} placeholder="e.g. 3 days" />
-        </label>
+      <QuestionCard title="Did it start suddenly or gradually?">
+        <ChoiceButtons
+          value={data.hpi.course}
+          options={["Suddenly", "Gradually", "Not sure"]}
+          onChange={value => update("hpi.course", value)}
+        />
+      </QuestionCard>
 
-        {chestPain && (
-          <>
-            <label>
-              Character
-              <select value={data.hpi.character} onChange={e => update("hpi.character", e.target.value)}>
-                <option value="">Select</option>
-                <option>Pressure</option>
-                <option>Burning</option>
-                <option>Sharp</option>
-                <option>Dull</option>
-                <option>Other</option>
-              </select>
-            </label>
+      <QuestionCard title="Has it been getting better, worse, or staying the same?">
+        <ChoiceButtons
+          value={data.hpi.duration}
+          options={["Better", "Worse", "About the same", "Comes and goes"]}
+          onChange={value => update("hpi.duration", value)}
+        />
+      </QuestionCard>
 
-            <label>
-              Radiation
-              <input value={data.hpi.radiation} onChange={e => update("hpi.radiation", e.target.value)} placeholder="Does it move anywhere?" />
-            </label>
-
-            <label>
-              Aggravating factors
-              <input value={data.hpi.aggravating} onChange={e => update("hpi.aggravating", e.target.value)} />
-            </label>
-
-            <label>
-              Relieving factors
-              <input value={data.hpi.relieving} onChange={e => update("hpi.relieving", e.target.value)} />
-            </label>
-          </>
-        )}
-      </div>
-
-      <label>
-        Associated symptoms
-        <textarea value={data.hpi.associatedSymptoms} onChange={e => update("hpi.associatedSymptoms", e.target.value)}
-          placeholder="Describe other symptoms you have noticed..." />
-      </label>
+      {chestPain && (
+        <div className="card">
+          <h3>Chest pain details</h3>
+          <label>
+            What does the pain feel like?
+            <select
+              value={data.hpi.character}
+              onChange={e => update("hpi.character", e.target.value)}
+            >
+              <option value="">Select</option>
+              <option>Pressure</option>
+              <option>Burning</option>
+              <option>Sharp</option>
+              <option>Dull</option>
+              <option>Other</option>
+            </select>
+          </label>
+          <label>
+            Does it move anywhere?
+            <input
+              value={data.hpi.radiation}
+              onChange={e => update("hpi.radiation", e.target.value)}
+              placeholder="Optional"
+            />
+          </label>
+        </div>
+      )}
 
       <label>
-        Patient's description
-        <textarea value={data.hpi.narrative} onChange={e => update("hpi.narrative", e.target.value)}
-          placeholder={t(data.patient.language, "patientDescription")} />
+        Is there anything that makes it better or worse?
+        <textarea
+          value={data.hpi.narrative}
+          onChange={e => update("hpi.narrative", e.target.value)}
+          placeholder="Optional..."
+        />
       </label>
     </section>
   );
 }
 
-function TextSection({ title, value, onChange, placeholder }) {
+function ChoiceButtons({ value, options, onChange, multi = false }) {
+  const selected = multi ? (value || []) : value;
+  return (
+    <div className="option-grid">
+      {options.map(option => {
+        const isSelected = multi
+          ? selected.includes(option)
+          : selected === option;
+
+        return (
+          <button
+            type="button"
+            key={option}
+            className={isSelected ? "selected" : ""}
+            onClick={() => {
+              if (multi) {
+                const current = Array.isArray(selected) ? selected : [];
+                const next = current.includes(option)
+                  ? current.filter(item => item !== option)
+                  : [...current.filter(item => item !== "None"), option];
+                onChange(next);
+              } else {
+                onChange(option);
+              }
+            }}
+          >
+            {option}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function QuestionCard({ title, children }) {
+  return (
+    <div className="card">
+      <h3>{title}</h3>
+      {children}
+    </div>
+  );
+}
+
+function PastMedicalSection({ data, update }) {
   return (
     <section>
-      <h1>{title}</h1>
-      <textarea className="big-text" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} />
-      <div className="card">
-        If the patient has no information to provide, leave this section empty. The final summary will mark it as "Not provided".
-      </div>
+      <h1>Past Medical History</h1>
+      <p>Just the key medical history relevant to your care.</p>
+
+      <QuestionCard title="Have you ever been diagnosed with any major health condition?">
+        <ChoiceButtons
+          value={data.conditions?.[0] || ""}
+          options={["Diabetes", "High BP", "Heart disease", "Asthma or lung disease", "Kidney disease", "Thyroid condition", "Other", "None"]}
+          onChange={value => update("pastMedicalHistory.conditions", value === "None" ? ["None"] : [value])}
+        />
+      </QuestionCard>
+
+      {data.conditions?.[0] && data.conditions[0] !== "None" && (
+        <label>
+          Any other important diagnosed conditions?
+          <input
+            value={data.conditions.filter(item => item !== "None").slice(1).join(", ")}
+            onChange={e => {
+              const base = data.conditions[0];
+              const extra = e.target.value ? e.target.value.split(",").map(x => x.trim()).filter(Boolean) : [];
+              update("pastMedicalHistory.conditions", [base, ...extra]);
+            }}
+            placeholder="Optional"
+          />
+        </label>
+      )}
+
+      <QuestionCard title="Have you ever been admitted to a hospital for an illness?">
+        <ChoiceButtons
+          value={data.hospitalization}
+          options={["Yes", "No"]}
+          onChange={value => update("pastMedicalHistory.hospitalization", value)}
+        />
+        {data.hospitalization === "Yes" && (
+          <input
+            value={data.hospitalizationDetails || ""}
+            onChange={e => update("pastMedicalHistory.hospitalizationDetails", e.target.value)}
+            placeholder="What was it for?"
+          />
+        )}
+      </QuestionCard>
+
+      <QuestionCard title="Are you currently being treated for any health condition?">
+        <ChoiceButtons
+          value={data.currentTreatment}
+          options={["Yes", "No"]}
+          onChange={value => update("pastMedicalHistory.currentTreatment", value)}
+        />
+        {data.currentTreatment === "Yes" && (
+          <input
+            value={data.currentTreatmentDetails || ""}
+            onChange={e => update("pastMedicalHistory.currentTreatmentDetails", e.target.value)}
+            placeholder="What condition?"
+          />
+        )}
+      </QuestionCard>
+    </section>
+  );
+}
+
+function PastSurgicalSection({ data, update, setSection }) {
+  const nextSection = () => setSection("drugs");
+
+  return (
+    <section>
+      <h1>Past Surgical History</h1>
+      <p>Tell us only about previous surgeries or major procedures.</p>
+
+      <QuestionCard title="Have you ever had surgery or a major procedure?">
+        <ChoiceButtons
+          value={data.hadSurgery}
+          options={["Yes", "No"]}
+          onChange={value => {
+            update("pastSurgicalHistory.hadSurgery", value);
+            if (value === "No") nextSection();
+          }}
+        />
+      </QuestionCard>
+
+      {data.hadSurgery === "Yes" && (
+        <>
+          <label>
+            What surgery or procedure did you have?
+            <input
+              value={data.surgeryDetails}
+              onChange={e => update("pastSurgicalHistory.surgeryDetails", e.target.value)}
+              placeholder="e.g. appendectomy"
+            />
+          </label>
+
+          <QuestionCard title="Approximately when was it done?">
+            <ChoiceButtons
+              value={data.surgeryWhen}
+              options={["Less than 1 year ago", "1–5 years ago", "More than 5 years ago", "Not sure"]}
+              onChange={value => update("pastSurgicalHistory.surgeryWhen", value)}
+            />
+          </QuestionCard>
+        </>
+      )}
+    </section>
+  );
+}
+
+function DrugHistorySection({ data, update, setSection }) {
+  return (
+    <section>
+      <h1>Drug History</h1>
+      <p>We only ask the follow-up questions if you are currently taking medicines.</p>
+
+      <QuestionCard title="Are you currently taking any medicines?">
+        <ChoiceButtons
+          value={data.taking}
+          options={["Yes", "No"]}
+          onChange={value => {
+            update("drugs.taking", value);
+            if (value === "No") setSection("allergies");
+          }}
+        />
+      </QuestionCard>
+
+      {data.taking === "Yes" && (
+        <>
+          <label>
+            What medicines are you currently taking?
+            <textarea
+              value={data.medicines}
+              onChange={e => update("drugs.medicines", e.target.value)}
+              placeholder="Medicine names, if known..."
+            />
+          </label>
+
+          <QuestionCard title="How regularly do you take them?">
+            <ChoiceButtons
+              value={data.regularity}
+              options={["Every day", "Sometimes", "Only when needed", "Not regularly"]}
+              onChange={value => update("drugs.regularity", value)}
+            />
+          </QuestionCard>
+
+          <QuestionCard title="Are you taking any supplements, herbal medicines, or traditional medicines?">
+            <ChoiceButtons
+              value={data.supplements}
+              options={["Yes", "No"]}
+              onChange={value => update("drugs.supplements", value)}
+            />
+            {data.supplements === "Yes" && (
+              <input
+                value={data.supplementDetails || ""}
+                onChange={e => update("drugs.supplementDetails", e.target.value)}
+                placeholder="What are you taking?"
+              />
+            )}
+          </QuestionCard>
+        </>
+      )}
+    </section>
+  );
+}
+
+function AllergyHistorySection({ data, update, setSection }) {
+  return (
+    <section>
+      <h1>Allergy History</h1>
+      <p>Knowing about allergies helps keep your treatment safe.</p>
+
+      <QuestionCard title="Do you have any known allergies?">
+        <ChoiceButtons
+          value={data.hasAllergy}
+          options={["Yes", "No", "Not sure"]}
+          onChange={value => {
+            update("allergies.hasAllergy", value);
+            if (value === "No") setSection("family");
+          }}
+        />
+      </QuestionCard>
+
+      {data.hasAllergy === "Yes" && (
+        <>
+          <QuestionCard title="What are you allergic to?">
+            <ChoiceButtons
+              value={data.allergyTypes}
+              multi
+              options={["Medicines", "Foods", "Dust or pollen", "Other"]}
+              onChange={value => update("allergies.allergyTypes", value)}
+            />
+          </QuestionCard>
+
+          <label>
+            What happens when you are exposed to it?
+            <input
+              value={data.reaction}
+              onChange={e => update("allergies.reaction", e.target.value)}
+              placeholder="e.g. rash, swelling, breathing difficulty"
+            />
+          </label>
+        </>
+      )}
+    </section>
+  );
+}
+
+function FamilyHistorySection({ data, update }) {
+  return (
+    <section>
+      <h1>Family History</h1>
+      <p>We are only looking for important conditions in your immediate family.</p>
+
+      <QuestionCard title="Does anyone in your immediate family have an important health condition?">
+        <ChoiceButtons
+          value={data.importantCondition}
+          options={["Yes", "No", "Not sure"]}
+          onChange={value => update("familyHistory.importantCondition", value)}
+        />
+      </QuestionCard>
+
+      {data.importantCondition === "Yes" && (
+        <>
+          <QuestionCard title="Which conditions occur in your family?">
+            <ChoiceButtons
+              value={data.conditions}
+              multi
+              options={["Diabetes", "High BP", "Heart disease", "Cancer", "Asthma or lung disease", "Mental health condition", "Other"]}
+              onChange={value => update("familyHistory.conditions", value)}
+            />
+          </QuestionCard>
+
+          <QuestionCard title="Who in your family has it?">
+            <ChoiceButtons
+              value={data.relation}
+              options={["Parent", "Sibling", "Grandparent", "Other"]}
+              onChange={value => update("familyHistory.relation", value)}
+            />
+          </QuestionCard>
+        </>
+      )}
+    </section>
+  );
+}
+
+function PersonalHistorySection({ data, update }) {
+  return (
+    <section>
+      <h1>Personal History</h1>
+      <p>A few quick questions about your usual routine and lifestyle.</p>
+
+      <QuestionCard title="How would you describe your usual diet?">
+        <ChoiceButtons
+          value={data.diet}
+          options={["Vegetarian", "Non-vegetarian", "Mixed", "Other"]}
+          onChange={value => update("personalHistory.diet", value)}
+        />
+      </QuestionCard>
+
+      <QuestionCard title="How is your usual sleep?">
+        <ChoiceButtons
+          value={data.sleep}
+          options={["Good", "Sometimes disturbed", "Frequently disturbed"]}
+          onChange={value => update("personalHistory.sleep", value)}
+        />
+      </QuestionCard>
+
+      <QuestionCard title="How physically active are you on a normal day?">
+        <ChoiceButtons
+          value={data.activity}
+          options={["Mostly sedentary", "Lightly active", "Moderately active", "Very active"]}
+          onChange={value => update("personalHistory.activity", value)}
+        />
+      </QuestionCard>
+
+      <label>
+        Are there any regular habits or lifestyle factors that are important for your health?
+        <textarea
+          value={data.lifestyle}
+          onChange={e => update("personalHistory.lifestyle", e.target.value)}
+          placeholder="Optional..."
+        />
+      </label>
     </section>
   );
 }
@@ -1333,57 +1765,331 @@ function TextSection({ title, value, onChange, placeholder }) {
 function ROSSection({ data, update }) {
   const toggle = (group, symptom) => {
     const current = data[group] || [];
-    const next = current.includes(symptom) ? current.filter(x => x !== symptom) : [...current, symptom];
+    const next = current.includes(symptom)
+      ? current.filter(x => x !== symptom)
+      : [...current.filter(x => x !== "None"), symptom];
     update(`ros.${group}`, next);
   };
+
+  const renderGroup = (group, title, symptoms) => (
+    <div className="card" key={group}>
+      <h3>{title}</h3>
+      <div className="option-grid">
+        {[...symptoms, "None"].map(symptom => (
+          <button
+            type="button"
+            key={symptom}
+            className={(data[group] || []).includes(symptom) ? "selected" : ""}
+            onClick={() => {
+              if (symptom === "None") {
+                update(`ros.${group}`, ["None"]);
+              } else {
+                toggle(group, symptom);
+              }
+            }}
+          >
+            {symptom}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
   return (
     <section>
       <h1>Review of Systems</h1>
-      {Object.entries(rosGroups).map(([group, symptoms]) => (
-        <div className="card" key={group}>
-          <h3>{group}</h3>
-          <div className="option-grid">
-            {symptoms.map(s => (
-              <button key={s} className={(data[group] || []).includes(s) ? "selected" : ""} onClick={() => toggle(group, s)}>
-                {s}
-              </button>
-            ))}
-          </div>
-        </div>
-      ))}
+      <p>A quick symptom check across the main body systems.</p>
+
+      {renderGroup("general", "General symptoms", ["Fever", "Fatigue", "Weight change", "Loss of appetite"])}
+      {renderGroup("respiratory", "Breathing / chest symptoms", ["Cough", "Breathlessness", "Wheezing", "Chest discomfort"])}
+      {renderGroup("gastrointestinal", "Stomach / bowel symptoms", ["Nausea", "Vomiting", "Abdominal pain", "Change in bowel habits"])}
+      {renderGroup("neurological", "Neurological symptoms", ["Headache", "Dizziness", "Weakness", "Numbness"])}
     </section>
   );
 }
 
 function AYUSHSection({ data, update }) {
-  const fields = [
-    ["prakriti", "Prakriti"],
-    ["vikriti", "Vikriti"],
-    ["sara", "Sara"],
-    ["samhanana", "Samhanana"],
-    ["pramana", "Pramana"],
-    ["satmya", "Satmya"],
-    ["sattva", "Sattva"],
-    ["aharaShakti", "Ahara Shakti"],
-    ["vyayamaShakti", "Vyayama Shakti"],
-    ["vaya", "Vaya"]
-  ];
+  const Question = ({ label, path, options, type = "select", placeholder = "" }) => {
+    const value = path.split(".").reduce((obj, key) => obj?.[key], data) || "";
+
+    if (type === "textarea") {
+      return (
+        <label>
+          {label}
+          <textarea
+            value={value}
+            onChange={e => update(`ayush.${path}`, e.target.value)}
+            placeholder={placeholder}
+          />
+        </label>
+      );
+    }
+
+    if (type === "number") {
+      return (
+        <label>
+          {label}
+          <input
+            type="number"
+            value={value}
+            onChange={e => update(`ayush.${path}`, e.target.value)}
+            placeholder={placeholder}
+          />
+        </label>
+      );
+    }
+
+    return (
+      <label>
+        {label}
+        <select
+          value={value}
+          onChange={e => update(`ayush.${path}`, e.target.value)}
+        >
+          <option value="">Select</option>
+          {options.map(option => <option key={option}>{option}</option>)}
+        </select>
+      </label>
+    );
+  };
+
+  const Category = ({ number, title, focus, children }) => (
+    <div className="card">
+      <h2>{number}. {title}</h2>
+      <p><strong>Information focus:</strong> {focus}</p>
+      {children}
+    </div>
+  );
+
   return (
     <section>
       <h1>AYUSH History — Dashavidha Pariksha</h1>
-      <p>Structured fields for the AYUSH consultation mode specified in the PS.</p>
-      <div className="grid">
-        {fields.map(([key, label]) => (
-          <label key={key}>
-            {label}
-            <input value={data[key]} onChange={e => update(`ayush.${key}`, e.target.value)} />
-          </label>
-        ))}
-      </div>
-      <label>
-        Ahara-Vihara assessment
-        <textarea value={data.aharaVihara} onChange={e => update("ayush.aharaVihara", e.target.value)} />
-      </label>
+      <p>
+        A focused patient-friendly assessment. Basic patient details such as age,
+        gender and language are already captured above and are not repeated here.
+      </p>
+
+      <Category number="1" title="Prakriti" focus="Usual body characteristics and baseline tendencies">
+        <Question
+          label="How would you describe your usual body build?"
+          path="prakriti.bodyBuild"
+          options={["Lean", "Medium", "Broad or solid", "Not sure"]}
+        />
+        <Question
+          label="When your routine and diet are fairly normal, does your weight usually stay stable, tend to be low, or tend to increase easily?"
+          path="prakriti.weightTendency"
+          options={["Low", "Stable", "Increases easily", "Unsure"]}
+        />
+        <Question
+          label="How would you describe your usual appetite when you are well?"
+          path="prakriti.appetiteTendency"
+          options={["Irregular", "Strong", "Moderate-steady", "Variable"]}
+        />
+        <Question
+          label="When you are generally well, how does your digestion usually feel after meals?"
+          path="prakriti.digestionTendency"
+          options={["Often irregular", "Often fast or strong", "Usually slow or heavy", "Usually comfortable", "Unsure"]}
+        />
+        <Question
+          label="When you are well, how is your usual sleep?"
+          path="prakriti.sleepPattern"
+          options={["Light/easily disturbed", "Moderate", "Deep/long", "Variable"]}
+        />
+        <Question
+          label="Do you usually feel more comfortable in cool conditions, warm conditions, or neither?"
+          path="prakriti.temperaturePreference"
+          options={["Prefer warmth", "Prefer coolness", "Neither"]}
+        />
+      </Category>
+
+      <Category number="2" title="Vikriti" focus="Current changes from your normal state">
+        <Question
+          label="What has changed from your usual health or routine?"
+          path="vikriti.changeFromNormal"
+          type="textarea"
+          placeholder="Describe any important changes..."
+        />
+        <Question
+          label="Compared with your usual appetite, how is your appetite now?"
+          path="vikriti.currentAppetite"
+          options={["Lower", "Higher", "About the same", "Variable"]}
+        />
+        <Question
+          label="How has your digestion been recently?"
+          path="vikriti.currentDigestion"
+          options={["Normal", "Indigestion", "Bloating/gas", "Burning/acidity", "Heavy/slow", "Other"]}
+        />
+        <Question
+          label="Have your bowel movements changed recently?"
+          path="vikriti.bowelHabit"
+          options={["No", "Constipation", "Loose stools", "More frequent", "Less frequent", "Other"]}
+        />
+        <Question
+          label="Has your sleep changed recently?"
+          path="vikriti.sleepChange"
+          options={["No", "Difficulty falling asleep", "Frequent waking", "Sleeping more", "Other"]}
+        />
+        <Question
+          label="How has your energy been recently compared with normal?"
+          path="vikriti.energyChange"
+          options={["Lower", "Higher/restless", "About the same", "Variable"]}
+        />
+      </Category>
+
+      <Category number="3" title="Sara" focus="General physical health and recovery">
+        <Question
+          label="How would you describe your overall physical strength and health when you are well?"
+          path="sara.overallPhysicalHealth"
+          options={["Poor", "Fair", "Good", "Very good"]}
+        />
+        <Question
+          label="After illness, injury or significant exertion, how well do you usually recover?"
+          path="sara.recovery"
+          options={["Slowly", "Moderately", "Quickly", "Unsure"]}
+        />
+        <Question
+          label="How would you rate your usual overall vitality?"
+          path="sara.generalVitality"
+          options={["Low", "Moderate", "High", "Very high"]}
+        />
+      </Category>
+
+      <Category number="4" title="Samhanana" focus="Body frame and musculoskeletal build">
+        <Question
+          label="How would you describe your natural body frame?"
+          path="samhanana.bodyFrame"
+          options={["Small", "Medium", "Large"]}
+        />
+        <Question
+          label="How would you describe your bones and joints?"
+          path="samhanana.boneJointBuild"
+          options={["Fine/small", "Medium", "Large/strong", "Unsure"]}
+        />
+        <Question
+          label="Do your joints generally feel stable and strong?"
+          path="samhanana.jointStability"
+          options={["Yes", "Sometimes", "No", "Unsure"]}
+        />
+      </Category>
+
+      <Category number="5" title="Pramana" focus="Objective body measurements">
+        <div className="grid">
+          <Question label="What is your height? (cm)" path="pramana.height" type="number" />
+          <Question label="What is your current weight? (kg)" path="pramana.weight" type="number" />
+        </div>
+        <Question
+          label="If available, what is your waist circumference? (cm)"
+          path="pramana.waistCircumference"
+          type="number"
+          placeholder="Leave empty if not available"
+        />
+      </Category>
+
+      <Category number="6" title="Satmya" focus="What you are accustomed to and tolerate well">
+        <Question
+          label="Are there foods that you regularly eat without discomfort or problems?"
+          path="satmya.foodTolerance"
+          type="textarea"
+          placeholder="List foods if applicable..."
+        />
+        <Question
+          label="Are there foods that commonly cause discomfort, bloating, loose stools, acidity, rash, or another reaction?"
+          path="satmya.foodIntolerance"
+          type="textarea"
+          placeholder="List foods and reactions if applicable..."
+        />
+        <Question
+          label="Which environment do you generally tolerate better?"
+          path="satmya.climateTolerance"
+          options={["Hot", "Cold", "Both similarly", "Unsure"]}
+        />
+      </Category>
+
+      <Category number="7" title="Satva" focus="Mental resilience and coping">
+        <Question
+          label="When you face a stressful situation, how do you usually respond?"
+          path="sattva.stressResponse"
+          options={["Become easily overwhelmed", "Usually cope", "Remain calm and focused", "Variable"]}
+        />
+        <Question
+          label="How well do you usually manage difficult situations?"
+          path="sattva.copingAbility"
+          options={["With difficulty", "Moderately well", "Very well"]}
+        />
+        <Question
+          label="How well can you usually stay focused on a task?"
+          path="sattva.concentration"
+          options={["Poor", "Fair", "Good", "Very good"]}
+        />
+        <Question
+          label="When you are under stress, do you usually have someone you can rely on?"
+          path="sattva.support"
+          options={["Yes", "Sometimes", "No", "Prefer not to say"]}
+        />
+      </Category>
+
+      <Category number="8" title="Ahara Shakti" focus="Appetite, meal capacity and meal tolerance">
+        <Question
+          label="How often do you usually feel hungry during the day?"
+          path="aharaShakti.usualHunger"
+          options={["Rarely", "1–2 times", "3 times", "Frequently"]}
+        />
+        <Question
+          label="How much food can you usually eat comfortably at one meal?"
+          path="aharaShakti.mealCapacity"
+          options={["Small amount", "Moderate amount", "Large amount", "Variable"]}
+        />
+        <Question
+          label="After a normal meal, how do you usually feel?"
+          path="aharaShakti.mealTolerance"
+          options={["Comfortable", "Heavy or sleepy", "Burning/acidity", "Bloating/gas", "Other"]}
+        />
+      </Category>
+
+      <Category number="9" title="Vyayama Shakti" focus="Physical activity capacity and endurance">
+        <Question
+          label="How physically active are you on a normal day?"
+          path="vyayamaShakti.usualActivity"
+          options={["Mostly sedentary", "Lightly active", "Moderately active", "Very active"]}
+        />
+        <Question
+          label="How much continuous physical activity can you usually do comfortably?"
+          path="vyayamaShakti.exerciseTolerance"
+          options={["Less than 10 min", "10–30 min", "30–60 min", "More than 60 min"]}
+        />
+        <Question
+          label="During usual activity, do you become unusually tired or short of breath?"
+          path="vyayamaShakti.breathlessnessFatigue"
+          options={["No", "Sometimes", "Often", "Depends on activity"]}
+        />
+        <Question
+          label="After exercise, how quickly do you usually return to your normal energy level?"
+          path="vyayamaShakti.recovery"
+          options={["Slowly", "Moderately", "Quickly"]}
+        />
+        <Question
+          label="What types of exercise or physical activity do you normally do?"
+          path="vyayamaShakti.usualExercise"
+          type="textarea"
+          placeholder="Describe usual exercise or physical activity..."
+        />
+      </Category>
+
+      <Category number="10" title="Vaya" focus="Age and life stage">
+        <div className="card">
+          <strong>Age is already captured in Patient Identification.</strong>
+          <p>
+            No duplicate age or date-of-birth question is shown here.
+            If a practitioner needs additional life-stage context, it can be entered below.
+          </p>
+        </div>
+        <Question
+          label="Are there any age-related life-stage factors that are important for today's assessment?"
+          path="vaya.lifeStageContext"
+          type="textarea"
+          placeholder="Optional..."
+        />
+      </Category>
     </section>
   );
 }
@@ -1417,22 +2123,53 @@ function Review({ data, redFlag, onSubmit }) {
       ]} />
 
       <Summary title="History of Present Illness" rows={[
-        ["Onset", value(data.hpi.onset)],
-        ["Duration", value(data.hpi.duration)],
+        ["Location", value(data.hpi.location)],
+        ["Severity", value(data.hpi.severity)],
+        ["Started", value(data.hpi.onset)],
+        ["Started suddenly/gradually", value(data.hpi.course)],
+        ["Course", value(data.hpi.duration)],
         ["Character", value(data.hpi.character)],
         ["Radiation", value(data.hpi.radiation)],
-        ["Aggravating factors", value(data.hpi.aggravating)],
-        ["Relieving factors", value(data.hpi.relieving)],
-        ["Associated symptoms", value(data.hpi.associatedSymptoms)],
-        ["Patient description", value(data.hpi.narrative)]
+        ["Better/worse factors", value(data.hpi.narrative)]
       ]} />
 
-      <Summary title="Past Medical History" rows={[["History", value(data.pastMedicalHistory)]]} />
-      <Summary title="Past Surgical History" rows={[["History", value(data.pastSurgicalHistory)]]} />
-      <Summary title="Drug History" rows={[["Medicines", value(data.drugs)]]} />
-      <Summary title="Allergy History" rows={[["Allergies", value(data.allergies)]]} />
-      <Summary title="Family History" rows={[["History", value(data.familyHistory)]]} />
-      <Summary title="Personal History" rows={[["History", value(data.personalHistory)]]} />
+      <Summary title="Past Medical History" rows={[
+        ["Conditions", value(data.pastMedicalHistory.conditions)],
+        ["Hospitalization", value(data.pastMedicalHistory.hospitalization)],
+        ["Current treatment", value(data.pastMedicalHistory.currentTreatment)]
+      ]} />
+
+      <Summary title="Past Surgical History" rows={[
+        ["Surgery", value(data.pastSurgicalHistory.hadSurgery)],
+        ["Procedure", value(data.pastSurgicalHistory.surgeryDetails)],
+        ["When", value(data.pastSurgicalHistory.surgeryWhen)]
+      ]} />
+
+      <Summary title="Drug History" rows={[
+        ["Currently taking medicines", value(data.drugs.taking)],
+        ["Medicines", value(data.drugs.medicines)],
+        ["Regularity", value(data.drugs.regularity)],
+        ["Supplements / herbal / traditional medicines", value(data.drugs.supplements)]
+      ]} />
+
+      <Summary title="Allergy History" rows={[
+        ["Known allergy", value(data.allergies.hasAllergy)],
+        ["Allergy type", value(data.allergies.allergyTypes)],
+        ["Reaction", value(data.allergies.reaction)]
+      ]} />
+
+      <Summary title="Family History" rows={[
+        ["Important family condition", value(data.familyHistory.importantCondition)],
+        ["Conditions", value(data.familyHistory.conditions)],
+        ["Relation", value(data.familyHistory.relation)]
+      ]} />
+
+      <Summary title="Personal History" rows={[
+        ["Diet", value(data.personalHistory.diet)],
+        ["Sleep", value(data.personalHistory.sleep)],
+        ["Activity", value(data.personalHistory.activity)],
+        ["Lifestyle", value(data.personalHistory.lifestyle)]
+      ]} />
 
       <Summary title="Review of Systems" rows={Object.entries(data.ros).map(([k, v]) => [k, value(v)])} />
 
